@@ -133,6 +133,26 @@ pub fn init_db() -> Result<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS downloads (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            song_id         TEXT NOT NULL,
+            source          TEXT NOT NULL,
+            name            TEXT NOT NULL,
+            singer          TEXT NOT NULL,
+            quality         TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            progress        REAL NOT NULL DEFAULT 0.0,
+            bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+            bytes_total     INTEGER NOT NULL DEFAULT 0,
+            error_message   TEXT,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            UNIQUE(song_id, source)
+        );",
+        [],
+    )?;
+
     // Insert "Favorites" reserved playlist
     let now = chrono::Local::now().to_rfc3339();
     let _ = conn.execute(
@@ -203,6 +223,219 @@ pub fn list_sources() -> Result<Vec<SourceDbEntry>> {
         result.push(entry?);
     }
     Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadEntry {
+    pub id: i64,
+    pub song_id: String,
+    pub source: String,
+    pub name: String,
+    pub singer: String,
+    pub quality: String,
+    pub status: String, // 'pending', 'downloading', 'completed', 'failed'
+    pub progress: f64,
+    pub bytes_downloaded: u64,
+    pub bytes_total: u64,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub fn insert_download(
+    song_id: &str,
+    source: &str,
+    name: &str,
+    singer: &str,
+    quality: &str,
+) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO downloads (
+            song_id, source, name, singer, quality, status, progress, bytes_downloaded, bytes_total, error_message, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            song_id,
+            source,
+            name,
+            singer,
+            quality,
+            "pending",
+            0.0,
+            0,
+            0,
+            None::<String>,
+            now,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_downloads(status_filter: Option<&str>) -> Result<Vec<DownloadEntry>> {
+    let conn = get_db_conn()?;
+    let mut query = "SELECT id, song_id, source, name, singer, quality, status, progress, bytes_downloaded, bytes_total, error_message, created_at, updated_at FROM downloads".to_string();
+    if status_filter.is_some() {
+        query.push_str(" WHERE status = ?1");
+    }
+    query.push_str(" ORDER BY created_at ASC");
+
+    let mut stmt = conn.prepare(&query)?;
+    let mut result = Vec::new();
+    if let Some(status) = status_filter {
+        let rows = stmt.query_map(params![status], |row| {
+            let bytes_downloaded: i64 = row.get(8)?;
+            let bytes_total: i64 = row.get(9)?;
+            Ok(DownloadEntry {
+                id: row.get(0)?,
+                song_id: row.get(1)?,
+                source: row.get(2)?,
+                name: row.get(3)?,
+                singer: row.get(4)?,
+                quality: row.get(5)?,
+                status: row.get(6)?,
+                progress: row.get(7)?,
+                bytes_downloaded: bytes_downloaded as u64,
+                bytes_total: bytes_total as u64,
+                error_message: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+        for row in rows {
+            result.push(row?);
+        }
+    } else {
+        let rows = stmt.query_map([], |row| {
+            let bytes_downloaded: i64 = row.get(8)?;
+            let bytes_total: i64 = row.get(9)?;
+            Ok(DownloadEntry {
+                id: row.get(0)?,
+                song_id: row.get(1)?,
+                source: row.get(2)?,
+                name: row.get(3)?,
+                singer: row.get(4)?,
+                quality: row.get(5)?,
+                status: row.get(6)?,
+                progress: row.get(7)?,
+                bytes_downloaded: bytes_downloaded as u64,
+                bytes_total: bytes_total as u64,
+                error_message: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })?;
+        for row in rows {
+            result.push(row?);
+        }
+    }
+    Ok(result)
+}
+
+pub fn update_download_status(id: i64, status: &str, error_message: Option<&str>) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET status = ?1, error_message = ?2, updated_at = ?3 WHERE id = ?4",
+        params![status, error_message, now, id],
+    )?;
+    Ok(())
+}
+
+pub fn update_download_progress(
+    id: i64,
+    progress: f64,
+    bytes_downloaded: u64,
+    bytes_total: u64,
+) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET progress = ?1, bytes_downloaded = ?2, bytes_total = ?3, updated_at = ?4 WHERE id = ?5",
+        params![progress, bytes_downloaded as i64, bytes_total as i64, now, id],
+    )?;
+    Ok(())
+}
+
+pub fn get_download_by_song(song_id: &str, source: &str) -> Result<Option<DownloadEntry>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, song_id, source, name, singer, quality, status, progress, bytes_downloaded, bytes_total, error_message, created_at, updated_at
+         FROM downloads WHERE song_id = ?1 AND source = ?2"
+    )?;
+    let mut rows = stmt.query(params![song_id, source])?;
+    if let Some(row) = rows.next()? {
+        let bytes_downloaded: i64 = row.get(8)?;
+        let bytes_total: i64 = row.get(9)?;
+        Ok(Some(DownloadEntry {
+            id: row.get(0)?,
+            song_id: row.get(1)?,
+            source: row.get(2)?,
+            name: row.get(3)?,
+            singer: row.get(4)?,
+            quality: row.get(5)?,
+            status: row.get(6)?,
+            progress: row.get(7)?,
+            bytes_downloaded: bytes_downloaded as u64,
+            bytes_total: bytes_total as u64,
+            error_message: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn get_download_by_id(id: i64) -> Result<Option<DownloadEntry>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, song_id, source, name, singer, quality, status, progress, bytes_downloaded, bytes_total, error_message, created_at, updated_at
+         FROM downloads WHERE id = ?1"
+    )?;
+    let mut rows = stmt.query(params![id])?;
+    if let Some(row) = rows.next()? {
+        let bytes_downloaded: i64 = row.get(8)?;
+        let bytes_total: i64 = row.get(9)?;
+        Ok(Some(DownloadEntry {
+            id: row.get(0)?,
+            song_id: row.get(1)?,
+            source: row.get(2)?,
+            name: row.get(3)?,
+            singer: row.get(4)?,
+            quality: row.get(5)?,
+            status: row.get(6)?,
+            progress: row.get(7)?,
+            bytes_downloaded: bytes_downloaded as u64,
+            bytes_total: bytes_total as u64,
+            error_message: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn reset_downloading_to_pending() -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET status = 'pending', updated_at = ?1 WHERE status = 'downloading'",
+        params![now],
+    )?;
+    Ok(())
+}
+
+pub fn retry_download(id: i64) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET status = 'pending', progress = 0.0, bytes_downloaded = 0, bytes_total = 0, error_message = NULL, updated_at = ?1 WHERE id = ?2",
+        params![now, id],
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -476,14 +709,36 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
     Ok(result)
 }
 
+pub fn remove_from_playlist(playlist_name: &str, song_id: &str, source: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    let playlist_id: i32 = conn.query_row(
+        "SELECT id FROM playlists WHERE name = ?1",
+        params![playlist_name],
+        |row| row.get(0),
+    )?;
+
+    conn.execute(
+        "DELETE FROM playlist_songs WHERE playlist_id = ?1 AND song_id = ?2 AND source = ?3",
+        params![playlist_id, song_id, source],
+    )?;
+
+    // Update song count
+    conn.execute(
+        "UPDATE playlists SET song_count = (SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = ?1) WHERE id = ?1",
+        params![playlist_id],
+    )?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env;
 
     #[test]
-    fn test_search_cache_operations() {
-        let temp_dir = env::temp_dir().join("rust-lx-test-db-ops");
+    fn test_db_all_operations() {
+        let temp_dir = env::temp_dir().join("rust-lx-test-db-all-ops");
         if temp_dir.exists() {
             let _ = std::fs::remove_dir_all(&temp_dir);
         }
@@ -508,33 +763,66 @@ mod tests {
             extra: None,
         };
 
-        // Test insertion
+        // 1. Test search cache insertion
         assert!(insert_search_cache(&entry).is_ok());
 
-        // Test retrieval by song_id + source
+        // 2. Test retrieval by song_id + source
         let retrieved = get_song_from_cache("testsong1", "wy").unwrap();
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.name, "Test Song");
         assert_eq!(retrieved.cli_id, "testcli1");
 
-        // Test retrieval by cli_id prefix
+        // 3. Test retrieval by cli_id prefix
         let retrieved_by_cli = get_song_by_cli_id("testc").unwrap();
         assert!(retrieved_by_cli.is_some());
         assert_eq!(retrieved_by_cli.unwrap().name, "Test Song");
 
-        // Test play history
+        // 4. Test play history
         assert!(add_to_history(&entry, Some(10)).is_ok());
         let hist = get_history(5).unwrap();
         assert_eq!(hist.len(), 1);
         assert_eq!(hist[0].name, "Test Song");
 
-        // Test playlists
+        // 5. Test playlists
         assert!(create_playlist("My List", Some("Desc")).is_ok());
         assert!(add_to_playlist("My List", &entry).is_ok());
         let songs = get_playlist_songs("My List").unwrap();
         assert_eq!(songs.len(), 1);
         assert_eq!(songs[0].name, "Test Song");
+
+        // 6. Test downloads queue insertion
+        assert!(insert_download("song123", "wy", "My Song", "My Singer", "320k").is_ok());
+        let dls = list_downloads(Some("pending")).unwrap();
+        assert_eq!(dls.len(), 1);
+        assert_eq!(dls[0].name, "My Song");
+
+        // 7. Test progress and status update
+        let id = dls[0].id;
+        assert!(update_download_status(id, "downloading", None).is_ok());
+        assert!(update_download_progress(id, 0.5, 500, 1000).is_ok());
+
+        let dl = get_download_by_id(id).unwrap().unwrap();
+        assert_eq!(dl.status, "downloading");
+        assert_eq!(dl.progress, 0.5);
+        assert_eq!(dl.bytes_downloaded, 500);
+        assert_eq!(dl.bytes_total, 1000);
+
+        // 8. Test reset stale downloading to pending
+        assert!(reset_downloading_to_pending().is_ok());
+        let dl = get_download_by_song("song123", "wy").unwrap().unwrap();
+        assert_eq!(dl.status, "pending");
+
+        // 9. Test retry
+        assert!(update_download_status(id, "failed", Some("Network Timeout")).is_ok());
+        let dl = get_download_by_id(id).unwrap().unwrap();
+        assert_eq!(dl.status, "failed");
+        assert_eq!(dl.error_message.unwrap(), "Network Timeout");
+
+        assert!(retry_download(id).is_ok());
+        let dl = get_download_by_id(id).unwrap().unwrap();
+        assert_eq!(dl.status, "pending");
+        assert!(dl.error_message.is_none());
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);

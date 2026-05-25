@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
 use crate::library::db::{SearchCacheEntry, add_to_history, get_song_by_cli_id};
 use crate::player::MpvClient;
 use crate::source::SourceManager;
@@ -6,6 +7,7 @@ use colored::Colorize;
 use lux_core::types::Quality;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 pub async fn run(
     id_or_urls: Vec<String>,
@@ -15,7 +17,66 @@ pub async fn run(
     json: bool,
 ) -> Result<()> {
     if id_or_urls.is_empty() {
-        return Err(anyhow!("No song ID, URL, or file path provided"));
+        let config = lux_core::config::Config::load().unwrap_or_default();
+        if config.player.auto_resume {
+            let paths = lux_core::config::resolve_paths();
+            let current_json_path = paths.cache_dir.join("current.json");
+            if current_json_path.exists() {
+                if let Ok(content) = fs::read_to_string(&current_json_path) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(song_val) = val.get("song") {
+                            if let Ok(song) =
+                                serde_json::from_value::<SearchCacheEntry>(song_val.clone())
+                            {
+                                let last_pos = val
+                                    .get("last_position")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.0);
+                                let volume = val
+                                    .get("volume")
+                                    .and_then(|v| v.as_u64())
+                                    .map(|v| v as u8)
+                                    .unwrap_or(config.player.default_volume);
+
+                                let client = MpvClient::new();
+                                let resolved_url = if song.source == "local" {
+                                    song.extra.clone().unwrap_or_default()
+                                } else {
+                                    let mgr = SourceManager::new();
+                                    mgr.resolve_url(
+                                        &song.source,
+                                        &song.song_id,
+                                        config.source.default_quality,
+                                    )?
+                                };
+
+                                if !resolved_url.is_empty() {
+                                    if !json {
+                                        println!(
+                                            "{} Resuming playback: {} — {} (at {:.1}s)...",
+                                            "▶".green().bold(),
+                                            song.name.bold(),
+                                            song.singer.cyan(),
+                                            last_pos
+                                        );
+                                    }
+                                    client.play_file_or_url(&resolved_url)?;
+                                    client.set_volume(volume)?;
+                                    if last_pos > 0.0 {
+                                        std::thread::sleep(Duration::from_millis(300));
+                                        let _ = client.seek(&last_pos.to_string());
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return Err(anyhow!(
+            "No active song found to resume, or auto_resume is disabled. Please provide a song ID."
+        ));
     }
 
     let config = lux_core::config::Config::load().unwrap_or_default();

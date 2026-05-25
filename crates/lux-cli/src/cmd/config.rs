@@ -53,8 +53,12 @@ fn get_config_val(config: &lux_core::config::Config, key: &str) -> Result<String
         "player.default_volume" => Ok(config.player.default_volume.to_string()),
         "player.repeat" => Ok(config.player.repeat.clone()),
         "player.shuffle" => Ok(config.player.shuffle.to_string()),
+        "player.enable_mpris" => Ok(config.player.enable_mpris.to_string()),
+        "player.auto_resume" => Ok(config.player.auto_resume.to_string()),
         "download.output_dir" => Ok(config.download.output_dir.clone()),
         "download.filename_template" => Ok(config.download.filename_template.clone()),
+        "download.beet_import" => Ok(config.download.beet_import.to_string()),
+        "download.use_beets_library" => Ok(config.download.use_beets_library.to_string()),
         "history.max_age_days" => Ok(config.history.max_age_days.to_string()),
         "display.color" => Ok(config.display.color.clone()),
         "display.table_style" => Ok(config.display.table_style.clone()),
@@ -81,11 +85,23 @@ fn set_config_val(config: &mut lux_core::config::Config, key: &str, value: &str)
         "player.shuffle" => {
             config.player.shuffle = value.parse::<bool>()?;
         }
+        "player.enable_mpris" => {
+            config.player.enable_mpris = value.parse::<bool>()?;
+        }
+        "player.auto_resume" => {
+            config.player.auto_resume = value.parse::<bool>()?;
+        }
         "download.output_dir" => {
             config.download.output_dir = value.to_string();
         }
         "download.filename_template" => {
             config.download.filename_template = value.to_string();
+        }
+        "download.beet_import" => {
+            config.download.beet_import = value.parse::<bool>()?;
+        }
+        "download.use_beets_library" => {
+            config.download.use_beets_library = value.parse::<bool>()?;
         }
         "history.max_age_days" => {
             config.history.max_age_days = value.parse::<u64>()?;

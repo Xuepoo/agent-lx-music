@@ -1,6 +1,9 @@
 pub mod config;
+pub mod download;
+pub mod local;
 pub mod now;
 pub mod play;
+pub mod playlist;
 pub mod search;
 pub mod source;
 
@@ -156,6 +159,15 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         }
         Commands::Source { action } => {
             source::run(action, json)?;
+        }
+        Commands::Download { action } => {
+            download::run(action, json).await?;
+        }
+        Commands::Playlist { action } => {
+            playlist::run(action, json).await?;
+        }
+        Commands::Local { action } => {
+            local::run(action, json).await?;
         }
     }
     Ok(())
