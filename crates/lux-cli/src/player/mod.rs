@@ -127,6 +127,9 @@ impl MpvClient {
                         if !paused && pos > 0.0 {
                             let _ = Self::update_current_playing_position(pos, vol);
                         }
+                        if let Ok(Some(new_idx)) = client.get_playing_index() {
+                            let _ = Self::sync_queue_playing_index(new_idx);
+                        }
                     }
                 }
             });
@@ -156,6 +159,47 @@ impl MpvClient {
                     let _ = fs::write(current_json_path, serialized);
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn sync_queue_playing_index(new_idx: usize) -> Result<()> {
+        let paths = lux_core::config::resolve_paths();
+        let queue_json_path = paths.cache_dir.join("queue.json");
+        if !queue_json_path.exists() {
+            return Ok(());
+        }
+
+        let content = fs::read_to_string(&queue_json_path)?;
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct LocalPlayQueue {
+            songs: Vec<crate::library::db::SearchCacheEntry>,
+            current_index: Option<usize>,
+        }
+
+        let mut queue: LocalPlayQueue = serde_json::from_str(&content)?;
+        if queue.current_index != Some(new_idx) {
+            queue.current_index = Some(new_idx);
+
+            if new_idx < queue.songs.len() {
+                let song = &queue.songs[new_idx];
+
+                // 1. Save to current.json
+                let current_json_path = paths.cache_dir.join("current.json");
+                let new_state = serde_json::json!({
+                    "song": song,
+                    "last_position": 0.0,
+                    "volume": 80,
+                    "updated_at": chrono::Local::now().to_rfc3339()
+                });
+                let _ = fs::write(current_json_path, serde_json::to_string(&new_state)?);
+
+                // 2. Add to history
+                let _ = crate::library::db::add_to_history(song, None);
+            }
+
+            let serialized = serde_json::to_string(&queue)?;
+            fs::write(queue_json_path, serialized)?;
         }
         Ok(())
     }
@@ -344,6 +388,21 @@ impl MpvClient {
         .unwrap_or(false);
 
         Ok(Some((path, pos, duration, vol, paused)))
+    }
+
+    pub fn get_playing_index(&self) -> Result<Option<usize>> {
+        if std::os::unix::net::UnixStream::connect(&self.socket_path).is_err() {
+            return Ok(None);
+        }
+        let val = ipc::send_mpv_command(
+            &self.socket_path,
+            vec![json!("get_property"), json!("playlist-playing-pos")],
+        )?;
+        if val.is_null() {
+            return Ok(None);
+        }
+        let idx = val.as_i64().map(|v| v as usize);
+        Ok(idx)
     }
 
     pub fn quit(&self) -> Result<()> {
