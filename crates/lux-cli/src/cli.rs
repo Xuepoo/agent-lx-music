@@ -123,16 +123,97 @@ pub enum Commands {
         #[command(subcommand)]
         action: LocalAction,
     },
+
+    /// Manage the active playback queue
+    #[command(visible_alias = "q")]
+    Queue {
+        #[command(subcommand)]
+        action: QueueAction,
+    },
+
+    /// Manage your favorites playlist
+    #[command(visible_alias = "favorites")]
+    Fav {
+        #[command(subcommand)]
+        action: FavAction,
+    },
+
+    /// Show play history
+    #[command(visible_alias = "hist")]
+    History {
+        #[arg(short, long, default_value_t = 20, help = "How many entries to show")]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum QueueAction {
+    /// Show current play queue
+    Show,
+    /// Append song(s) to queue by CLI ID
+    Add {
+        #[arg(required = true, help = "CLI ID(s) of the song(s)")]
+        ids: Vec<String>,
+    },
+    /// Insert song(s) after current track by CLI ID
+    Insert {
+        #[arg(required = true, help = "CLI ID(s) of the song(s)")]
+        ids: Vec<String>,
+    },
+    /// Remove song at specified position from queue
+    Remove {
+        #[arg(required = true, help = "Position in queue (1-indexed)")]
+        position: usize,
+    },
+    /// Clear entire play queue
+    Clear,
+    /// Move song position in queue
+    Move {
+        #[arg(required = true, help = "Source position (1-indexed)")]
+        from: usize,
+        #[arg(required = true, help = "Destination position (1-indexed)")]
+        to: usize,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum FavAction {
+    /// List all favorites
+    List,
+    /// Add song to favorites (defaults to currently playing song if ID is omitted)
+    Add {
+        #[arg(help = "CLI ID of the song")]
+        id: Option<String>,
+    },
+    /// Remove song from favorites by CLI ID
+    Remove {
+        #[arg(required = true, help = "CLI ID of the song")]
+        id: String,
+    },
+    /// Play all favorites
+    Play {
+        #[arg(long, help = "Shuffle favorites")]
+        shuffle: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DownloadAction {
     /// Queue a song for background download by CLI ID
     Add {
-        #[arg(required = true, help = "CLI ID(s) of the song(s) from search results")]
+        #[arg(
+            required_unless_present = "file",
+            help = "CLI ID(s) of the song(s) from search results"
+        )]
         ids: Vec<String>,
         #[arg(short, long, help = "Override audio quality")]
         quality: Option<String>,
+        #[arg(
+            short,
+            long,
+            help = "Batch download list from playlist file (M3U, CSV, TXT/LIST)"
+        )]
+        file: Option<String>,
     },
     /// Start the detached background download daemon (used internally)
     Daemon,
@@ -169,6 +250,29 @@ pub enum PlaylistAction {
         name: String,
         #[arg(long, help = "Shuffle tracks")]
         shuffle: bool,
+    },
+    /// Import playlist from universal file formats (M3U, CSV, TXT/LIST, JSON)
+    Import {
+        file: String,
+        #[arg(short, long, help = "Custom name for imported playlist")]
+        name: Option<String>,
+        #[arg(long, help = "Download all matched songs immediately")]
+        download: bool,
+        #[arg(short, long, help = "Request specific high-res quality matching")]
+        quality: Option<String>,
+    },
+    /// Export playlist to universal file formats
+    Export {
+        name: String,
+        #[arg(
+            short,
+            long,
+            default_value = "m3u",
+            help = "Output format: m3u, json, csv, txt"
+        )]
+        format: String,
+        #[arg(short, long, help = "Output directory or file path")]
+        output: Option<String>,
     },
 }
 

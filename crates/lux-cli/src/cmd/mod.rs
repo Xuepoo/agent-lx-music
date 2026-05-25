@@ -1,9 +1,12 @@
 pub mod config;
 pub mod download;
+pub mod fav;
+pub mod history;
 pub mod local;
 pub mod now;
 pub mod play;
 pub mod playlist;
+pub mod queue;
 pub mod search;
 pub mod source;
 
@@ -168,6 +171,15 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         }
         Commands::Local { action } => {
             local::run(action, json).await?;
+        }
+        Commands::Queue { action } => {
+            queue::run(action, json).await?;
+        }
+        Commands::Fav { action } => {
+            fav::run(action, json).await?;
+        }
+        Commands::History { limit } => {
+            history::run(limit, json).await?;
         }
     }
     Ok(())

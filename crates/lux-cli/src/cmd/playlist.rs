@@ -218,6 +218,196 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                 );
             }
         }
+        PlaylistAction::Import {
+            file,
+            name,
+            download,
+            quality,
+        } => {
+            let file_path = std::path::Path::new(&file);
+            if !file_path.exists() {
+                return Err(anyhow!("Playlist file '{}' does not exist.", file));
+            }
+            let content = fs::read_to_string(file_path)?;
+
+            let imported_tracks =
+                crate::library::playlist_parser::parse_universal_playlist(&content);
+            if imported_tracks.is_empty() {
+                return Err(anyhow!(
+                    "No valid tracks found in playlist file '{}'.",
+                    file
+                ));
+            }
+
+            let playlist_name = name.unwrap_or_else(|| {
+                file_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Imported Playlist")
+                    .to_string()
+            });
+
+            db::create_playlist(&playlist_name, Some("Imported Playlist"))?;
+
+            if !json {
+                println!(
+                    "{} Importing {} songs into playlist \"{}\"...",
+                    "⚡".yellow().bold(),
+                    imported_tracks.len(),
+                    playlist_name.green().bold()
+                );
+            }
+
+            let parsed_quality = quality.and_then(|q| q.parse::<lux_core::types::Quality>().ok());
+            let config = lux_core::config::Config::load().unwrap_or_default();
+            let dl_quality = parsed_quality.unwrap_or(config.source.default_quality);
+
+            let mut success_count = 0;
+            let mut resolved_songs = Vec::new();
+
+            for (idx, track) in imported_tracks.iter().enumerate() {
+                if !json {
+                    println!(
+                        "  [{}/{}] Matching: {} — {} ...",
+                        idx + 1,
+                        imported_tracks.len(),
+                        track.title.bold(),
+                        track.artist.cyan()
+                    );
+                }
+
+                match crate::library::playlist_parser::resolve_imported_track(track, parsed_quality)
+                    .await
+                {
+                    Ok(Some(entry)) => {
+                        if db::add_to_playlist(&playlist_name, &entry).is_ok() {
+                            success_count += 1;
+                            resolved_songs.push(entry.clone());
+
+                            if download {
+                                let _ = db::insert_download(
+                                    &entry.song_id,
+                                    &entry.source,
+                                    &entry.name,
+                                    &entry.singer,
+                                    &dl_quality.to_string(),
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        if !json {
+                            println!(
+                                "  {} Failed to match or resolve this song.",
+                                "✗".red().bold()
+                            );
+                        }
+                    }
+                }
+            }
+
+            if download && success_count > 0 {
+                let _ = crate::cmd::download::ensure_daemon_running();
+            }
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "imported",
+                        "playlist": playlist_name,
+                        "total": imported_tracks.len(),
+                        "success": success_count
+                    })
+                );
+            } else {
+                println!(
+                    "\n{} Successfully imported {}/{} songs into playlist \"{}\".",
+                    "✓".green().bold(),
+                    success_count,
+                    imported_tracks.len(),
+                    playlist_name.green().bold()
+                );
+                if download && success_count > 0 {
+                    println!(
+                        "{} Detached background download daemon triggered.",
+                        "⚡".yellow().bold()
+                    );
+                }
+            }
+        }
+        PlaylistAction::Export {
+            name,
+            format,
+            output,
+        } => {
+            let songs = db::get_playlist_songs(&name)?;
+            if songs.is_empty() {
+                return Err(anyhow!("Playlist \"{}\" is empty or does not exist.", name));
+            }
+
+            let export_content = match format.to_lowercase().as_str() {
+                "json" => serde_json::to_string_pretty(&songs)?,
+                "csv" => {
+                    let mut csv = String::from("Track Name,Artist Name(s),Album\n");
+                    for song in &songs {
+                        let safe_name = song.name.replace(',', " ");
+                        let safe_singer = song.singer.replace(',', " ");
+                        let safe_album = song.album_name.as_deref().unwrap_or("").replace(',', " ");
+                        csv.push_str(&format!("{},{},{}\n", safe_name, safe_singer, safe_album));
+                    }
+                    csv
+                }
+                "txt" => {
+                    let mut txt = String::new();
+                    for song in &songs {
+                        txt.push_str(&format!("{} - {}\n", song.singer, song.name));
+                    }
+                    txt
+                }
+                _ => {
+                    let mut m3u = String::from("#EXTM3U\n");
+                    for song in &songs {
+                        m3u.push_str(&format!("#EXTINF:-1,{} - {}\n", song.singer, song.name));
+                        m3u.push_str(&format!("rlx://{}/{}\n", song.source, song.song_id));
+                    }
+                    m3u
+                }
+            };
+
+            let out_file = if let Some(out_path) = output {
+                let path = std::path::Path::new(&out_path);
+                if path.is_dir() {
+                    path.join(format!("{}.{}", name, format))
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                std::env::current_dir()?.join(format!("{}.{}", name, format))
+            };
+
+            if let Some(parent) = out_file.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            fs::write(&out_file, export_content)?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "exported",
+                        "playlist": name,
+                        "file": out_file.to_string_lossy()
+                    })
+                );
+            } else {
+                println!(
+                    "✓ Playlist \"{}\" successfully exported to '{}'.",
+                    name.green().bold(),
+                    out_file.to_string_lossy().cyan()
+                );
+            }
+        }
     }
     Ok(())
 }

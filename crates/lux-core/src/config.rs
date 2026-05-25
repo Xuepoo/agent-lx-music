@@ -5,6 +5,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+fn default_platform_priority() -> Vec<String> {
+    vec![
+        "wy".to_string(),
+        "kw".to_string(),
+        "tx".to_string(),
+        "mg".to_string(),
+        "kg".to_string(),
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceSettings {
     pub default_source: String,
@@ -12,6 +22,8 @@ pub struct SourceSettings {
     pub quality_fallback: Vec<Quality>,
     pub js_priority: bool,
     pub priority: Vec<String>,
+    #[serde(default = "default_platform_priority")]
+    pub platform_priority: Vec<String>,
 }
 
 impl Default for SourceSettings {
@@ -26,6 +38,7 @@ impl Default for SourceSettings {
                 "ikun_v22".to_string(),
                 "huibq_v1.2.0".to_string(),
             ],
+            platform_priority: default_platform_priority(),
         }
     }
 }
@@ -300,6 +313,9 @@ js_priority = true
 # Sources not listed here get appended at the end in alphabetical order
 priority = ["sixyin_v1.2.1", "ikun_v22", "huibq_v1.2.0"]
 
+# Platform search and matching priority order
+platform_priority = ["wy", "kw", "tx", "mg", "kg"]
+
 [sources]
 # Source-specific overrides (optional)
 # [sources.sixyin_v1.2.1]
@@ -353,33 +369,43 @@ max_retries = 2
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
+
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn test_resolve_paths_with_home_override() {
-        let temp_dir = env::temp_dir().join("rust-lx-test-home");
+    fn test_all_config_operations() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+
+        // 1. Test resolve paths with home override
+        let temp_dir_home = env::temp_dir().join("rust-lx-test-home");
+        if temp_dir_home.exists() {
+            let _ = fs::remove_dir_all(&temp_dir_home);
+        }
         unsafe {
-            env::set_var("RUST_LX_HOME", temp_dir.to_str().unwrap());
+            env::set_var("RUST_LX_HOME", temp_dir_home.to_str().unwrap());
         }
 
         let paths = resolve_paths();
-        assert_eq!(paths.config_file, temp_dir.join("config.toml"));
-        assert_eq!(paths.data_dir, temp_dir.join("data"));
-        assert_eq!(paths.cache_dir, temp_dir.join("cache"));
-        assert_eq!(paths.sources_dir, temp_dir.join("data").join("sources"));
+        assert_eq!(paths.config_file, temp_dir_home.join("config.toml"));
+        assert_eq!(paths.data_dir, temp_dir_home.join("data"));
+        assert_eq!(paths.cache_dir, temp_dir_home.join("cache"));
+        assert_eq!(
+            paths.sources_dir,
+            temp_dir_home.join("data").join("sources")
+        );
 
         unsafe {
             env::remove_var("RUST_LX_HOME");
         }
-    }
 
-    #[test]
-    fn test_config_default_load_save() {
-        let temp_dir = env::temp_dir().join("rust-lx-test-default-load-save");
-        if temp_dir.exists() {
-            let _ = fs::remove_dir_all(&temp_dir);
+        // 2. Test config default load and save
+        let temp_dir_load = env::temp_dir().join("rust-lx-test-default-load-save");
+        if temp_dir_load.exists() {
+            let _ = fs::remove_dir_all(&temp_dir_load);
         }
         unsafe {
-            env::set_var("RUST_LX_HOME", temp_dir.to_str().unwrap());
+            env::set_var("RUST_LX_HOME", temp_dir_load.to_str().unwrap());
         }
 
         // Loading should initialize the default config
@@ -398,7 +424,8 @@ mod tests {
         let reloaded = Config::load().unwrap();
         assert_eq!(reloaded.player.default_volume, 90);
 
-        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir_load);
+        let _ = fs::remove_dir_all(&temp_dir_home);
         unsafe {
             env::remove_var("RUST_LX_HOME");
         }

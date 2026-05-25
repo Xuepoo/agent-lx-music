@@ -21,6 +21,19 @@ pub struct SourceDbEntry {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryDbEntry {
+    pub song_id: String,
+    pub source: String,
+    pub name: String,
+    pub singer: String,
+    pub album_name: Option<String>,
+    pub interval: Option<String>,
+    pub pic_url: Option<String>,
+    pub duration_played: Option<i32>,
+    pub played_at: String,
+}
+
 pub fn get_db_conn() -> Result<Connection> {
     let paths = lux_core::config::resolve_paths();
     if let Some(parent) = paths.db_file.parent() {
@@ -562,7 +575,51 @@ pub fn add_to_history(entry: &SearchCacheEntry, duration_played: Option<i32>) ->
             now,
         ],
     )?;
+
+    // Auto-purge old history
+    let config = lux_core::config::Config::load().unwrap_or_default();
+    let max_age_days = config.history.max_age_days;
+    let _ = purge_old_history(max_age_days as i64);
+
     Ok(())
+}
+
+pub fn purge_old_history(max_age_days: i64) -> Result<()> {
+    let conn = get_db_conn()?;
+    let cutoff = chrono::Local::now() - chrono::Duration::days(max_age_days);
+    let cutoff_str = cutoff.to_rfc3339();
+    conn.execute(
+        "DELETE FROM play_history WHERE played_at < ?1",
+        params![cutoff_str],
+    )?;
+    Ok(())
+}
+
+pub fn list_history_entries(limit: usize) -> Result<Vec<HistoryDbEntry>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT song_id, source, name, singer, album_name, interval, pic_url, duration_played, played_at
+         FROM play_history ORDER BY played_at DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok(HistoryDbEntry {
+            song_id: row.get(0)?,
+            source: row.get(1)?,
+            name: row.get(2)?,
+            singer: row.get(3)?,
+            album_name: row.get(4)?,
+            interval: row.get(5)?,
+            pic_url: row.get(6)?,
+            duration_played: row.get(7)?,
+            played_at: row.get(8)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
 }
 
 pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
@@ -783,6 +840,15 @@ mod tests {
         let hist = get_history(5).unwrap();
         assert_eq!(hist.len(), 1);
         assert_eq!(hist[0].name, "Test Song");
+
+        let detailed_hist = list_history_entries(5).unwrap();
+        assert_eq!(detailed_hist.len(), 1);
+        assert_eq!(detailed_hist[0].name, "Test Song");
+        assert_eq!(detailed_hist[0].duration_played, Some(10));
+
+        assert!(purge_old_history(0).is_ok());
+        let hist_after_purge = list_history_entries(5).unwrap();
+        assert_eq!(hist_after_purge.len(), 0);
 
         // 5. Test playlists
         assert!(create_playlist("My List", Some("Desc")).is_ok());
