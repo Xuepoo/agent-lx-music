@@ -3,6 +3,7 @@ use crate::cli::DownloadAction;
 use crate::library::db::{self, DownloadEntry};
 use crate::source::SourceManager;
 use anyhow::{Result, anyhow};
+use colored::Colorize;
 use id3::frame::{Content as Id3Content, Picture as Id3Picture, PictureType as Id3PictureType};
 use id3::{Frame as Id3Frame, Tag as Id3Tag, TagLike as Id3TagLike};
 use metaflac::Tag as FlacTag;
@@ -53,32 +54,103 @@ struct DownloadHistoryTableEntry {
 
 pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
     match action {
-        DownloadAction::Add { ids, quality } => {
+        DownloadAction::Add { ids, quality, file } => {
             let config = lux_core::config::Config::load().unwrap_or_default();
             let selected_quality = quality
-                .and_then(|q| std::str::FromStr::from_str(&q).ok())
+                .as_ref()
+                .and_then(|q| std::str::FromStr::from_str(q).ok())
                 .unwrap_or(config.source.default_quality);
 
             let mut added_songs = Vec::new();
 
-            for cli_id in ids {
-                let song_entry = db::get_song_by_cli_id(&cli_id)?.ok_or_else(|| {
-                    anyhow!("CLI ID '{}' not found in cache. Search first.", cli_id)
-                })?;
+            if let Some(file_path_str) = file {
+                let file_path = std::path::Path::new(&file_path_str);
+                if !file_path.exists() {
+                    return Err(anyhow!("Playlist file '{}' does not exist.", file_path_str));
+                }
+                let content = fs::read_to_string(file_path)?;
+                let imported_tracks =
+                    crate::library::playlist_parser::parse_universal_playlist(&content);
+                if imported_tracks.is_empty() {
+                    return Err(anyhow!(
+                        "No valid tracks found in playlist file '{}'.",
+                        file_path_str
+                    ));
+                }
 
-                db::insert_download(
-                    &song_entry.song_id,
-                    &song_entry.source,
-                    &song_entry.name,
-                    &song_entry.singer,
-                    selected_quality.as_str(),
-                )?;
+                if !json {
+                    println!(
+                        "{} Parsing playlist and matching {} songs...",
+                        "⚡".yellow().bold(),
+                        imported_tracks.len()
+                    );
+                }
 
-                added_songs.push(song_entry);
+                let parsed_quality = quality
+                    .as_ref()
+                    .and_then(|q| q.parse::<lux_core::types::Quality>().ok());
+
+                for (idx, track) in imported_tracks.iter().enumerate() {
+                    if !json {
+                        println!(
+                            "  [{}/{}] Matching: {} — {} ...",
+                            idx + 1,
+                            imported_tracks.len(),
+                            track.title.bold(),
+                            track.artist.cyan()
+                        );
+                    }
+
+                    match crate::library::playlist_parser::resolve_imported_track(
+                        track,
+                        parsed_quality,
+                    )
+                    .await
+                    {
+                        Ok(Some(entry)) => {
+                            let insert_res = db::insert_download(
+                                &entry.song_id,
+                                &entry.source,
+                                &entry.name,
+                                &entry.singer,
+                                selected_quality.as_str(),
+                            );
+                            if insert_res.is_ok() {
+                                added_songs.push(entry);
+                            }
+                        }
+                        _ => {
+                            if !json {
+                                println!(
+                                    "  {} Failed to match or resolve this song.",
+                                    "✗".red().bold()
+                                );
+                            }
+                        }
+                    }
+                }
+            } else {
+                for cli_id in ids {
+                    let song_entry = db::get_song_by_cli_id(&cli_id)?.ok_or_else(|| {
+                        anyhow!("CLI ID '{}' not found in cache. Search first.", cli_id)
+                    })?;
+
+                    db::insert_download(
+                        &song_entry.song_id,
+                        &song_entry.source,
+                        &song_entry.name,
+                        &song_entry.singer,
+                        selected_quality.as_str(),
+                    )?;
+
+                    added_songs.push(song_entry);
+                }
             }
 
             // Lazy spawn daemon if not running
-            ensure_daemon_running()?;
+            if !added_songs.is_empty() {
+                ensure_daemon_running()?;
+            }
 
             if json {
                 println!(
@@ -89,13 +161,17 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
                     })
                 );
             } else {
-                for song in added_songs {
+                for song in &added_songs {
                     println!(
                         "✓ Added \"{} - {}\" to download queue.",
                         song.singer, song.name
                     );
                 }
-                println!("Background download daemon triggered.");
+                if !added_songs.is_empty() {
+                    println!("Background download daemon triggered.");
+                } else {
+                    println!("No songs were added to the download queue.");
+                }
             }
         }
         DownloadAction::Daemon => {
@@ -181,7 +257,7 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn ensure_daemon_running() -> Result<()> {
+pub fn ensure_daemon_running() -> Result<()> {
     let paths = lux_core::config::resolve_paths();
     let pid_file = paths.cache_dir.join("download.pid");
 
