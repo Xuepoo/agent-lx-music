@@ -54,9 +54,11 @@ impl MpvClient {
         let volume_arg = format!("--volume={}", self.default_volume);
         let ipc_arg = format!("--input-ipc-server={}", self.socket_path.display());
 
-        let mut cmd = Command::new("mpv");
-        cmd.arg("--idle")
+        let mut cmd = Command::new("setsid");
+        cmd.arg("mpv")
+            .arg("--idle")
             .arg("--no-video")
+            .arg("--vo=null")
             .arg(&ipc_arg)
             .arg(&volume_arg);
 
@@ -85,9 +87,20 @@ impl MpvClient {
             cmd.arg(arg);
         }
 
-        // Redirect stdout/stderr to inherit to debug
-        cmd.stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit());
+        // Redirect stdout/stderr to a log file to allow inspection of background execution issues
+        let paths = lux_core::config::resolve_paths();
+        let log_path = paths.cache_dir.join("mpv.log");
+        let log_file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_path)
+            .unwrap();
+        let err_file = log_file.try_clone().unwrap();
+
+        cmd.stdout(log_file)
+            .stderr(err_file)
+            .stdin(std::process::Stdio::null());
 
         let mut child = cmd
             .spawn()

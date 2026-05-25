@@ -201,7 +201,14 @@ pub fn parse_universal_playlist(content: &str) -> Vec<ImportedTrack> {
         && trimmed
             .lines()
             .next()
-            .map(|l| l.contains("name") || l.contains("title") || l.contains("歌名"))
+            .map(|l| {
+                let lower = l.to_lowercase();
+                lower.contains("name")
+                    || lower.contains("title")
+                    || lower.contains("歌名")
+                    || lower.contains("track")
+                    || lower.contains("artist")
+            })
             .unwrap_or(false)
     {
         return parse_csv(trimmed);

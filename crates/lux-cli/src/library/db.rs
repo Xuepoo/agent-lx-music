@@ -629,10 +629,17 @@ pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
          FROM play_history ORDER BY played_at DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit], |row| {
+        let song_id: String = row.get(0)?;
+        let source: String = row.get(1)?;
+        let hash_input = format!("{}-{}", source, song_id);
+        use md5::Digest;
+        let digest = md5::Md5::digest(hash_input.as_bytes());
+        let cli_id = format!("{:x}", digest)[..8].to_string();
+
         Ok(SearchCacheEntry {
-            cli_id: "".to_string(),
-            song_id: row.get(0)?,
-            source: row.get(1)?,
+            cli_id,
+            song_id,
+            source,
             name: row.get(2)?,
             singer: row.get(3)?,
             album_name: row.get(4)?,
@@ -647,7 +654,9 @@ pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
 
     let mut result = Vec::new();
     for row in rows {
-        result.push(row?);
+        let entry = row?;
+        let _ = insert_search_cache(&entry);
+        result.push(entry);
     }
     Ok(result)
 }
@@ -743,10 +752,17 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
          FROM playlist_songs WHERE playlist_id = ?1 ORDER BY position ASC",
     )?;
     let rows = stmt.query_map(params![playlist_id], |row| {
+        let song_id: String = row.get(0)?;
+        let source: String = row.get(1)?;
+        let hash_input = format!("{}-{}", source, song_id);
+        use md5::Digest;
+        let digest = md5::Md5::digest(hash_input.as_bytes());
+        let cli_id = format!("{:x}", digest)[..8].to_string();
+
         Ok(SearchCacheEntry {
-            cli_id: "".to_string(),
-            song_id: row.get(0)?,
-            source: row.get(1)?,
+            cli_id,
+            song_id,
+            source,
             name: row.get(2)?,
             singer: row.get(3)?,
             album_name: row.get(4)?,
@@ -761,7 +777,9 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
 
     let mut result = Vec::new();
     for row in rows {
-        result.push(row?);
+        let entry = row?;
+        let _ = insert_search_cache(&entry);
+        result.push(entry);
     }
     Ok(result)
 }
