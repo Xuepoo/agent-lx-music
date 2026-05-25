@@ -1,0 +1,106 @@
+use crate::library::db::SearchCacheEntry;
+use crate::player::MpvClient;
+use anyhow::Result;
+use colored::Colorize;
+use std::fs;
+
+pub fn run(json: bool) -> Result<()> {
+    let client = MpvClient::new();
+    let status = client.get_playback_status()?;
+
+    if let Some((_path, pos, duration, vol, paused)) = status {
+        // Retrieve current metadata from ~/.cache/rust-lx/current.json
+        let paths = lux_core::config::resolve_paths();
+        let current_json_path = paths.cache_dir.join("current.json");
+        let song_opt: Option<SearchCacheEntry> = if current_json_path.exists() {
+            if let Ok(content) = fs::read_to_string(current_json_path) {
+                serde_json::from_str(&content).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": if paused { "paused" } else { "playing" },
+                    "position": pos,
+                    "duration": duration,
+                    "volume": vol,
+                    "song": song_opt
+                })
+            );
+        } else {
+            let status_indicator = if paused {
+                "⏸".yellow().bold()
+            } else {
+                "♫".green().bold()
+            };
+
+            if let Some(song) = song_opt {
+                println!(
+                    "\n{} {} — {}",
+                    status_indicator,
+                    song.name.bold(),
+                    song.singer.cyan()
+                );
+
+                if let Some(ref album) = song.album_name {
+                    print!("  Album: {} | ", album);
+                } else {
+                    print!("  ");
+                }
+                println!(
+                    "Source: {} | ID: {}",
+                    song.source.green(),
+                    song.cli_id.yellow()
+                );
+            } else {
+                println!("\n{} Playing direct URL/stream", status_indicator);
+            }
+
+            // Construct progress bar (20 chars wide)
+            let percent = if duration > 0.0 { pos / duration } else { 0.0 };
+            let filled = (percent * 20.0).round() as usize;
+            let empty = 20 - filled;
+            let bar = format!(
+                "{}{}",
+                "█".repeat(filled).green(),
+                "░".repeat(empty).dimmed()
+            );
+
+            let current_time = format_time(pos);
+            let total_time = format_time(duration);
+
+            println!(
+                "  [{}] {} / {}  Vol: {}%\n",
+                bar,
+                current_time.bold(),
+                total_time.bold(),
+                vol
+            );
+        }
+    } else {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "stopped",
+                    "message": "No playback is running"
+                })
+            );
+        } else {
+            println!("♫ No song is playing currently.");
+        }
+    }
+
+    Ok(())
+}
+
+fn format_time(secs_f: f64) -> String {
+    let secs = secs_f.round() as i64;
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}

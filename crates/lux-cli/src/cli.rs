@@ -64,6 +64,42 @@ pub enum Commands {
     /// Show current playback status
     Now,
 
+    /// Pause playback
+    Pause,
+
+    /// Resume playback
+    Resume,
+
+    /// Stop playback
+    Stop,
+
+    /// Set or show volume
+    Volume {
+        #[arg(help = "Volume value (e.g. 80, +10, -10)")]
+        value: Option<String>,
+    },
+
+    /// Seek to position
+    Seek {
+        #[arg(required = true, help = "Seek position (e.g. 2:30, +30, -10, 50%)")]
+        value: String,
+    },
+
+    /// Set or show repeat mode
+    Repeat {
+        #[arg(help = "Repeat mode (off, one, all)")]
+        mode: Option<String>,
+    },
+
+    /// Toggle or set shuffle mode
+    Shuffle {
+        #[arg(help = "Shuffle mode (on, off)")]
+        mode: Option<String>,
+    },
+
+    /// Stop mpv and exit daemon
+    Quit,
+
     /// Manage custom JavaScript music sources
     Source {
         #[command(subcommand)]

@@ -24,11 +24,69 @@ use std::sync::{Arc, Mutex};
 
 pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result<()> {
     let global = ctx.globals();
+
+    // Inject console
+    let console = Object::new(ctx.clone())?;
+    let log_fn = Function::new(
+        ctx.clone(),
+        MutFn::new(
+            |_ctx: Ctx<'js>, args: Rest<Value<'js>>| -> rquickjs::Result<()> {
+                let mut s = String::new();
+                for arg in args.0 {
+                    if let Some(val_str) = arg.as_string().and_then(|s| s.to_string().ok()) {
+                        s.push_str(&val_str);
+                        s.push(' ');
+                    } else if let Ok(json_val) = js_value_to_serde(arg.clone()) {
+                        s.push_str(&json_val.to_string());
+                        s.push(' ');
+                    }
+                }
+                println!("[JS] {}", s.trim_end());
+                Ok(())
+            },
+        ),
+    )?;
+    console.set("log", log_fn.clone())?;
+    console.set("info", log_fn.clone())?;
+    console.set("warn", log_fn.clone())?;
+    console.set("error", log_fn.clone())?;
+    console.set("group", log_fn.clone())?;
+    console.set("groupEnd", Function::new(ctx.clone(), || {})?)?;
+    global.set("console", console)?;
+
     let lx = Object::new(ctx.clone())?;
+
+    // Event names
+    let event_names = Object::new(ctx.clone())?;
+    event_names.set("inited", "inited")?;
+    event_names.set("request", "request")?;
+    event_names.set("updateAlert", "updateAlert")?;
+    lx.set("EVENT_NAMES", event_names)?;
 
     // Basic attributes
     lx.set("env", "cli")?;
     lx.set("version", "2.0.0")?;
+
+    // lx.currentScriptInfo
+    let current_script_info = Object::new(ctx.clone())?;
+    let (name, desc, ver, author, homepage, raw_script) = {
+        let s = state.lock().unwrap();
+        (
+            s.name.clone(),
+            s.description.clone(),
+            s.version.clone(),
+            s.author.clone(),
+            s.homepage.clone(),
+            s.raw_script.clone(),
+        )
+    };
+    current_script_info.set("name", name)?;
+    current_script_info.set("description", desc)?;
+    current_script_info.set("version", ver)?;
+    current_script_info.set("author", author)?;
+    current_script_info.set("homepage", homepage)?;
+    current_script_info.set("rawScript", raw_script)?;
+    lx.set("currentScriptInfo", current_script_info)?;
 
     // lx.send(eventName, data)
     let state_clone_send = state.clone();
