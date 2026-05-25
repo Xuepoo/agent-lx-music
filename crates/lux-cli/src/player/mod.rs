@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
 pub mod ipc;
 
 use anyhow::{Result, anyhow};
@@ -61,6 +62,25 @@ impl MpvClient {
 
         // Append optional user mpv arguments from config
         let config = lux_core::config::Config::load().unwrap_or_default();
+
+        // Auto-mount mpv-mpris if enabled
+        if config.player.enable_mpris {
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/fuyu"));
+            let mpris_paths = vec![
+                home.join(".config/mpv/scripts/mpris.so"),
+                PathBuf::from("/usr/lib/mpv/scripts/mpris.so"),
+                PathBuf::from("/usr/lib/mpv/mpris.so"),
+                PathBuf::from("/usr/lib/mpv-mpris/mpris.so"),
+                PathBuf::from("/usr/lib/x86_64-linux-gnu/mpv/scripts/mpris.so"),
+            ];
+            for path in mpris_paths {
+                if path.exists() {
+                    cmd.arg(format!("--script={}", path.display()));
+                    break;
+                }
+            }
+        }
+
         for arg in &config.player.mpv_args {
             cmd.arg(arg);
         }
@@ -77,6 +97,8 @@ impl MpvClient {
         for _ in 0..20 {
             thread::sleep(Duration::from_millis(50));
             if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
+                // Spawn background playback position ticker
+                Self::trigger_playback_ticker(self.socket_path.clone());
                 return Ok(());
             }
             // Check if process exited early
@@ -88,11 +110,70 @@ impl MpvClient {
         Err(anyhow!("Timeout waiting for mpv IPC socket to be created"))
     }
 
+    fn trigger_playback_ticker(socket_path: PathBuf) {
+        static LAUNCHED_TICKER: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !LAUNCHED_TICKER.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(5));
+                    let client = MpvClient {
+                        socket_path: socket_path.clone(),
+                        default_volume: 80,
+                    };
+                    if let Ok(Some((_path, pos, _duration, vol, paused))) =
+                        client.get_playback_status()
+                    {
+                        if !paused && pos > 0.0 {
+                            let _ = Self::update_current_playing_position(pos, vol);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    fn update_current_playing_position(pos: f64, vol: u8) -> Result<()> {
+        let paths = lux_core::config::resolve_paths();
+        let current_json_path = paths.cache_dir.join("current.json");
+        if current_json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&current_json_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let song = if val.get("song").is_some() {
+                        val.get("song").cloned().unwrap()
+                    } else {
+                        val.clone()
+                    };
+
+                    let new_state = serde_json::json!({
+                        "song": song,
+                        "last_position": pos,
+                        "volume": vol,
+                        "updated_at": chrono::Local::now().to_rfc3339()
+                    });
+
+                    let serialized = serde_json::to_string(&new_state)?;
+                    let _ = fs::write(current_json_path, serialized);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn play_file_or_url(&self, path_or_url: &str) -> Result<()> {
         self.ensure_running()?;
         let _ = ipc::send_mpv_command(
             &self.socket_path,
             vec![json!("loadfile"), json!(path_or_url), json!("replace")],
+        )?;
+        Ok(())
+    }
+
+    pub fn append_file_or_url(&self, path_or_url: &str) -> Result<()> {
+        self.ensure_running()?;
+        let _ = ipc::send_mpv_command(
+            &self.socket_path,
+            vec![json!("loadfile"), json!(path_or_url), json!("append")],
         )?;
         Ok(())
     }

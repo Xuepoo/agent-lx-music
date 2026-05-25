@@ -43,6 +43,8 @@ pub struct PlayerSettings {
     pub shuffle: bool,
     pub mpv_args: Vec<String>,
     pub mpv_socket: Option<String>,
+    pub enable_mpris: bool,
+    pub auto_resume: bool,
 }
 
 impl Default for PlayerSettings {
@@ -53,6 +55,8 @@ impl Default for PlayerSettings {
             shuffle: false,
             mpv_args: vec![],
             mpv_socket: None,
+            enable_mpris: true,
+            auto_resume: true,
         }
     }
 }
@@ -75,6 +79,8 @@ pub struct DownloadSettings {
     pub use_other_source: bool,
     pub group_by_source: bool,
     pub timeout: u64,
+    pub beet_import: bool,
+    pub use_beets_library: bool,
 }
 
 impl Default for DownloadSettings {
@@ -96,6 +102,8 @@ impl Default for DownloadSettings {
             use_other_source: true,
             group_by_source: false,
             timeout: 60,
+            beet_import: false,
+            use_beets_library: false,
         }
     }
 }
@@ -150,7 +158,9 @@ pub struct Config {
     pub source: SourceSettings,
     #[serde(default)]
     pub sources: HashMap<String, SourceOverride>,
+    #[serde(default)]
     pub player: PlayerSettings,
+    #[serde(default)]
     pub download: DownloadSettings,
     pub history: HistorySettings,
     pub display: DisplaySettings,
@@ -301,6 +311,8 @@ default_volume = 80
 repeat = "off" # "off", "one", "all"
 shuffle = false
 mpv_args = []
+enable_mpris = true
+auto_resume = true
 
 [download]
 output_dir = "~/Music/rust-lx"
@@ -319,6 +331,8 @@ skip_existing = true
 use_other_source = true
 group_by_source = false
 timeout = 60
+beet_import = false
+use_beets_library = false
 
 [history]
 max_age_days = 90

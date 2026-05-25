@@ -43,3 +43,6 @@ hex = { workspace = true }
 rusqlite = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
+id3 = { workspace = true }
+metaflac = { workspace = true }
+

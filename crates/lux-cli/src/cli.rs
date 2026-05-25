@@ -105,6 +105,84 @@ pub enum Commands {
         #[command(subcommand)]
         action: SourceAction,
     },
+
+    /// Manage background download tasks
+    Download {
+        #[command(subcommand)]
+        action: DownloadAction,
+    },
+
+    /// Manage custom playlists
+    Playlist {
+        #[command(subcommand)]
+        action: PlaylistAction,
+    },
+
+    /// Manage local scanned library (supports beets sync)
+    Local {
+        #[command(subcommand)]
+        action: LocalAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DownloadAction {
+    /// Queue a song for background download by CLI ID
+    Add {
+        #[arg(required = true, help = "CLI ID(s) of the song(s) from search results")]
+        ids: Vec<String>,
+        #[arg(short, long, help = "Override audio quality")]
+        quality: Option<String>,
+    },
+    /// Start the detached background download daemon (used internally)
+    Daemon,
+    /// View real-time status of active downloads
+    Status,
+    /// List history of all completed and failed downloads
+    List,
+    /// Retry a failed download task by task ID
+    Retry {
+        #[arg(required = true, help = "Task ID(s) to retry")]
+        ids: Vec<i64>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PlaylistAction {
+    /// List all playlists
+    List,
+    /// Create a new playlist
+    Create {
+        name: String,
+        description: Option<String>,
+    },
+    /// Delete an existing playlist
+    Delete { name: String },
+    /// Add a song to a playlist by CLI ID
+    Add { playlist: String, id: String },
+    /// Remove a song from a playlist by CLI ID
+    Remove { playlist: String, id: String },
+    /// Show all songs in a playlist
+    Show { name: String },
+    /// Play all tracks in a playlist
+    Play {
+        name: String,
+        #[arg(long, help = "Shuffle tracks")]
+        shuffle: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum LocalAction {
+    /// Scan local music directory or beets library to index files
+    Scan,
+    /// List all indexed local music
+    List,
+    /// Play a local song by index or filename
+    Play {
+        #[arg(required = true, help = "Index or filename of the local song")]
+        query: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
