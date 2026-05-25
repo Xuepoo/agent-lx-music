@@ -1,6 +1,7 @@
 mod cli;
 mod cmd;
 pub mod library;
+pub mod player;
 pub mod source;
 
 use clap::Parser;
@@ -22,7 +23,7 @@ async fn main() {
     let is_first_run = !paths.config_file.exists();
 
     // Dispatch subcommand execution
-    match cmd::dispatch(args.command, args.json) {
+    match cmd::dispatch(args.command, args.json).await {
         Ok(_) => {
             if is_first_run && !args.quiet && !args.json {
                 println!("\n{} {}!", "✓".green().bold(), "rust-lx initialized".bold());

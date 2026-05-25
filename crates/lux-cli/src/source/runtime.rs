@@ -6,6 +6,12 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 pub struct SandboxState {
     pub inited_data: Option<serde_json::Value>,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub author: String,
+    pub homepage: String,
+    pub raw_script: String,
 }
 
 pub struct JsSandbox {
@@ -35,7 +41,17 @@ impl JsSandbox {
         let resolved_err = Arc::new(Mutex::new(None));
 
         self.context.as_ref().unwrap().with(|ctx| -> Result<()> {
-            let state = Arc::new(Mutex::new(SandboxState::default()));
+            let meta = super::loader::parse_metadata(script).ok();
+            let mut state_obj = SandboxState::default();
+            if let Some(m) = meta {
+                state_obj.name = m.name;
+                state_obj.description = m.description.unwrap_or_default();
+                state_obj.version = m.version.unwrap_or_default();
+                state_obj.author = m.author.unwrap_or_default();
+                state_obj.homepage = m.homepage.unwrap_or_default();
+            }
+            state_obj.raw_script = script.to_string();
+            let state = Arc::new(Mutex::new(state_obj));
 
             let res = (|| -> Result<()> {
                 super::bridge::inject_lx(&ctx, state.clone())?;
@@ -73,6 +89,16 @@ impl JsSandbox {
                                 {
                                     let mut guard = r.lock().unwrap();
                                     *guard = Some(text);
+                                } else {
+                                    // If not a string, try JSON formatting or string fallback
+                                    let mut guard = r.lock().unwrap();
+                                    if let Some(obj) = val.as_object() {
+                                        if let Ok(msg) = obj.get::<_, String>("message") {
+                                            *guard = Some(msg);
+                                            return;
+                                        }
+                                    }
+                                    *guard = Some(format!("{:?}", val));
                                 }
                             }
                         })?;
@@ -84,6 +110,15 @@ impl JsSandbox {
                                 {
                                     let mut guard = e.lock().unwrap();
                                     *guard = Some(text);
+                                } else {
+                                    let mut guard = e.lock().unwrap();
+                                    if let Some(obj) = val.as_object() {
+                                        if let Ok(msg) = obj.get::<_, String>("message") {
+                                            *guard = Some(msg);
+                                            return;
+                                        }
+                                    }
+                                    *guard = Some(format!("{:?}", val));
                                 }
                             }
                         })?;
@@ -157,7 +192,17 @@ impl JsSandbox {
         let inited_data = Arc::new(Mutex::new(None));
 
         self.context.as_ref().unwrap().with(|ctx| -> Result<()> {
-            let state = Arc::new(Mutex::new(SandboxState::default()));
+            let meta = super::loader::parse_metadata(script).ok();
+            let mut state_obj = SandboxState::default();
+            if let Some(m) = meta {
+                state_obj.name = m.name;
+                state_obj.description = m.description.unwrap_or_default();
+                state_obj.version = m.version.unwrap_or_default();
+                state_obj.author = m.author.unwrap_or_default();
+                state_obj.homepage = m.homepage.unwrap_or_default();
+            }
+            state_obj.raw_script = script.to_string();
+            let state = Arc::new(Mutex::new(state_obj));
 
             let res = (|| -> Result<()> {
                 super::bridge::inject_lx(&ctx, state.clone())?;
