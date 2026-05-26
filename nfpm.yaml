@@ -1,6 +1,6 @@
 # nfpm.yaml
 name: "agent-lx-music"
-arch: "amd64"
+arch: "${ARCH}"
 platform: "linux"
 version: "${VERSION}"
 release: "1"
