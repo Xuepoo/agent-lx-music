@@ -76,4 +76,7 @@ All technical details, architectural blueprints, and contracts are located in th
 
 ## License
 
-MIT
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Disclaimer & Supplementary Agreement
+Please read our [Project Agreement & Disclaimer](DISCLAIMER.md) for terms of use, third-party source guidelines, copyright compliance, and non-commercial exploration rules.

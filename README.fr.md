@@ -74,6 +74,9 @@ Toutes les spécifications, protocoles et modèles de données se trouvent dans 
 
 ---
 
-## Licence
+## Licence et Clause de Non-responsabilité
 
 Ce projet est sous licence MIT.
+
+### Clause de non-responsabilité et Accord supplémentaire
+Veuillez lire attentivement notre [Accord du Projet & Clause de Non-responsabilité](DISCLAIMER.md) (en anglais) pour connaître les restrictions applicables aux sources musicales tierces, les exigences de suppression des données sous copyright sous 24 heures, l'interdiction d'usage commercial et l'exploration technologique d'apprentissage.
