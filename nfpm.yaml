@@ -1,0 +1,17 @@
+# nfpm.yaml
+name: "agent-lx-music"
+arch: "amd64"
+platform: "linux"
+version: "${VERSION}"
+release: "1"
+section: "sound"
+priority: "optional"
+maintainer: "Xuepoo <xuepoo@xuepoo.xyz>"
+description: "A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence."
+homepage: "https://github.com/Xuepoo/agent-lx-music"
+license: "MIT"
+contents:
+  - src: "alx"
+    dst: "/usr/bin/alx"
+  - src: "README.md"
+    dst: "/usr/share/doc/agent-lx-music/README.md"

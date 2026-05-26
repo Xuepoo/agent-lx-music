@@ -1,0 +1,183 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Continuous Integration (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libmpv-dev mpv
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy Quality Gate
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Workspace Tests
+        run: cargo test --workspace --all-features
+
+  release:
+    name: Cross-Compilation Release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux amd64 (gnu)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: alx
+            release_filename: alx-linux-x86_64
+          # Linux arm64 (gnu)
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: alx
+            release_filename: alx-linux-aarch64
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: alx
+            release_filename: alx-macos-x86_64
+          # macOS Apple Silicon (arm64)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: alx
+            release_filename: alx-macos-aarch64
+          # Windows amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: alx.exe
+            release_filename: alx-windows-x86_64.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release Target
+        run: cargo build --release --target ${{ matrix.target }} --bin alx
+
+      - name: Package Binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} dist/${{ matrix.release_filename }}
+          else
+            cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} dist/${{ matrix.release_filename }}
+            tar -czf dist/${{ matrix.release_filename }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.artifact_name }}
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.release_filename }}
+          path: dist/*
+
+  package-linux:
+    name: Package Debian, RPM, and APK
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux AMD64 Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: alx-linux-x86_64
+          path: dist-linux
+
+      - name: Install nFPM
+        uses: goreleaser/nfpm-action@v2
+        with:
+          install-only: true
+
+      - name: Build Packages (nFPM)
+        run: |
+          # Prepare binary for nFPM
+          cp dist-linux/alx-linux-x86_64 ./alx
+          chmod +x ./alx
+          
+          # Extract version from tag
+          VERSION=${GITHUB_REF#refs/tags/v}
+          export VERSION
+          
+          # Compile deb, rpm, apk
+          nfpm package --config nfpm.yaml --target dist-linux/agent-lx-music_${VERSION}_amd64.deb --packager deb
+          nfpm package --config nfpm.yaml --target dist-linux/agent-lx-music_${VERSION}_amd64.rpm --packager rpm
+          nfpm package --config nfpm.yaml --target dist-linux/agent-lx-music_${VERSION}_amd64.apk --packager apk
+
+      - name: Upload Linux Packages Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist-linux/*.deb
+          # Also cover .rpm and .apk
+          # Path supports multiple glob patterns or we can list files
+
+      - name: Upload RPM and APK Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm-apk
+          path: |
+            dist-linux/*.rpm
+            dist-linux/*.apk
+
+  publish:
+    name: Create GitHub Release & Upload Assets
+    needs: [release, package-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dist
+
+      - name: Gather Assets
+        run: |
+          mkdir -p release-assets
+          find all-dist -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.apk" -o -name "*.tar.gz" -o -name "*.exe" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
