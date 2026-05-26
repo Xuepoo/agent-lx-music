@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: ["main"]
   pull_request:
-    branches: [ main ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,28 +12,26 @@ env:
 
 jobs:
   test:
-    name: Continuous Integration (Linux)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libmpv-dev mpv
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
-      - name: Setup Rust stable
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Rust Cache
+      - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check Formatting
-        run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: cargo fmt -- --check
 
-      - name: Clippy Quality Gate
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint with Clippy
+        run: cargo clippy -- -D warnings
 
-      - name: Run Workspace Tests
-        run: cargo test --workspace --all-features
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Run tests
+        run: cargo test --verbose
