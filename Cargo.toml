@@ -11,6 +11,10 @@ version = "0.1.0"
 edition = "2024"
 authors = ["rust-lx authors"]
 license = "MIT"
+description = "A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence."
+repository = "https://github.com/Xuepoo/agent-lx-music"
+homepage = "https://github.com/Xuepoo/agent-lx-music"
+readme = "README.md"
 
 [workspace.dependencies]
 # Core
