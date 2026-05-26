@@ -99,7 +99,7 @@ pub struct DownloadSettings {
 impl Default for DownloadSettings {
     fn default() -> Self {
         Self {
-            output_dir: "~/Music/rust-lx".to_string(),
+            output_dir: "~/Music/agent-lx-music".to_string(),
             filename_template: "{singer} - {title}".to_string(),
             embed_metadata: true,
             embed_lyrics: true,
@@ -190,42 +190,42 @@ pub struct XdgPaths {
 }
 
 pub fn resolve_paths() -> XdgPaths {
-    let home = std::env::var("RUST_LX_HOME").ok().map(PathBuf::from);
+    let home = std::env::var("ALX_HOME").ok().map(PathBuf::from);
 
     let config_file = if let Some(ref h) = home {
         h.join("config.toml")
-    } else if let Ok(c) = std::env::var("RUST_LX_CONFIG") {
+    } else if let Ok(c) = std::env::var("ALX_CONFIG") {
         PathBuf::from(c)
     } else {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("/home/fuyu/.config"))
-            .join("rust-lx/config.toml")
+            .join("agent-lx-music/config.toml")
     };
 
     let data_dir = if let Some(ref h) = home {
         h.join("data")
-    } else if let Ok(d) = std::env::var("RUST_LX_DATA") {
+    } else if let Ok(d) = std::env::var("ALX_DATA") {
         PathBuf::from(d)
     } else {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("/home/fuyu/.local/share"))
-            .join("rust-lx")
+            .join("agent-lx-music")
     };
 
     let cache_dir = if let Some(ref h) = home {
         h.join("cache")
-    } else if let Ok(c) = std::env::var("RUST_LX_CACHE") {
+    } else if let Ok(c) = std::env::var("ALX_CACHE") {
         PathBuf::from(c)
     } else {
         dirs::cache_dir()
             .unwrap_or_else(|| PathBuf::from("/home/fuyu/.cache"))
-            .join("rust-lx")
+            .join("agent-lx-music")
     };
 
     XdgPaths {
         config_file,
         sources_dir: data_dir.join("sources"),
-        db_file: data_dir.join("rust-lx.db"),
+        db_file: data_dir.join("agent-lx-music.db"),
         data_dir,
         cache_dir,
     }
@@ -378,12 +378,12 @@ mod tests {
         let _guard = TEST_MUTEX.lock().unwrap();
 
         // 1. Test resolve paths with home override
-        let temp_dir_home = env::temp_dir().join("rust-lx-test-home");
+        let temp_dir_home = env::temp_dir().join("alx-test-home");
         if temp_dir_home.exists() {
             let _ = fs::remove_dir_all(&temp_dir_home);
         }
         unsafe {
-            env::set_var("RUST_LX_HOME", temp_dir_home.to_str().unwrap());
+            env::set_var("ALX_HOME", temp_dir_home.to_str().unwrap());
         }
 
         let paths = resolve_paths();
@@ -396,16 +396,16 @@ mod tests {
         );
 
         unsafe {
-            env::remove_var("RUST_LX_HOME");
+            env::remove_var("ALX_HOME");
         }
 
         // 2. Test config default load and save
-        let temp_dir_load = env::temp_dir().join("rust-lx-test-default-load-save");
+        let temp_dir_load = env::temp_dir().join("alx-test-default-load-save");
         if temp_dir_load.exists() {
             let _ = fs::remove_dir_all(&temp_dir_load);
         }
         unsafe {
-            env::set_var("RUST_LX_HOME", temp_dir_load.to_str().unwrap());
+            env::set_var("ALX_HOME", temp_dir_load.to_str().unwrap());
         }
 
         // Loading should initialize the default config
@@ -427,7 +427,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir_load);
         let _ = fs::remove_dir_all(&temp_dir_home);
         unsafe {
-            env::remove_var("RUST_LX_HOME");
+            env::remove_var("ALX_HOME");
         }
     }
 }

@@ -2,10 +2,10 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "rlx",
+    name = "alx",
     author,
     version,
-    about = "A terminal-native music CLI replacing lx-music-desktop",
+    about = "A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence.",
     long_about = None
 )]
 pub struct Cli {
@@ -143,6 +143,34 @@ pub enum Commands {
     History {
         #[arg(short, long, default_value_t = 20, help = "How many entries to show")]
         limit: usize,
+    },
+
+    /// Show or save lyrics for a song
+    #[command(visible_alias = "lrc")]
+    Lyric {
+        #[arg(
+            help = "CLI ID or platform song ID of the song (defaults to currently playing song)"
+        )]
+        id: Option<String>,
+        #[arg(short, long, help = "Display translated lyrics")]
+        translated: bool,
+        #[arg(short, long, help = "Display romanized lyrics")]
+        romanized: bool,
+        #[arg(short, long, help = "Save lyrics to .lrc file in download directory")]
+        save: bool,
+    },
+
+    /// Show or download cover art for a song
+    #[command(visible_alias = "cover")]
+    Pic {
+        #[arg(
+            help = "CLI ID or platform song ID of the song (defaults to currently playing song)"
+        )]
+        id: Option<String>,
+        #[arg(short, long, help = "Save cover art to file")]
+        save: bool,
+        #[arg(short, long, help = "Custom output directory or target path")]
+        output: Option<String>,
     },
 }
 

@@ -3,7 +3,9 @@ pub mod download;
 pub mod fav;
 pub mod history;
 pub mod local;
+pub mod lyric;
 pub mod now;
+pub mod pic;
 pub mod play;
 pub mod playlist;
 pub mod queue;
@@ -180,6 +182,17 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         }
         Commands::History { limit } => {
             history::run(limit, json).await?;
+        }
+        Commands::Lyric {
+            id,
+            translated,
+            romanized,
+            save,
+        } => {
+            lyric::run(id, translated, romanized, save, json).await?;
+        }
+        Commands::Pic { id, save, output } => {
+            pic::run(id, save, output, json).await?;
         }
     }
     Ok(())

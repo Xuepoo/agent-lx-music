@@ -166,6 +166,20 @@ pub fn init_db() -> Result<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS lyrics_cache (
+            song_id     TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            lyric       TEXT NOT NULL,
+            tlyric      TEXT,
+            rlyric      TEXT,
+            lxlyric     TEXT,
+            cached_at   TEXT NOT NULL,
+            PRIMARY KEY(song_id, source)
+        );",
+        [],
+    )?;
+
     // Insert "Favorites" reserved playlist
     let now = chrono::Local::now().to_rfc3339();
     let _ = conn.execute(
@@ -494,6 +508,51 @@ pub fn insert_search_cache(entry: &SearchCacheEntry) -> Result<()> {
     Ok(())
 }
 
+pub fn get_cached_lyrics(
+    song_id: &str,
+    source: &str,
+) -> Result<Option<lux_core::traits::LyricInfo>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT lyric, tlyric, rlyric, lxlyric FROM lyrics_cache WHERE song_id = ?1 AND source = ?2",
+    )?;
+    let mut rows = stmt.query(params![song_id, source])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(lux_core::traits::LyricInfo {
+            lyric: row.get(0)?,
+            tlyric: row.get(1)?,
+            rlyric: row.get(2)?,
+            lxlyric: row.get(3)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn insert_lyrics_cache(
+    song_id: &str,
+    source: &str,
+    info: &lux_core::traits::LyricInfo,
+) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR REPLACE INTO lyrics_cache (
+            song_id, source, lyric, tlyric, rlyric, lxlyric, cached_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            song_id,
+            source,
+            info.lyric,
+            info.tlyric,
+            info.rlyric,
+            info.lxlyric,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn get_song_from_cache(song_id: &str, source: &str) -> Result<Option<SearchCacheEntry>> {
     let conn = get_db_conn()?;
     let mut stmt = conn.prepare(
@@ -813,12 +872,12 @@ mod tests {
 
     #[test]
     fn test_db_all_operations() {
-        let temp_dir = env::temp_dir().join("rust-lx-test-db-all-ops");
+        let temp_dir = env::temp_dir().join("alx-test-db-all-ops");
         if temp_dir.exists() {
             let _ = std::fs::remove_dir_all(&temp_dir);
         }
         unsafe {
-            env::set_var("RUST_LX_HOME", temp_dir.to_str().unwrap());
+            env::set_var("ALX_HOME", temp_dir.to_str().unwrap());
         }
 
         assert!(init_db().is_ok());
@@ -908,10 +967,26 @@ mod tests {
         assert_eq!(dl.status, "pending");
         assert!(dl.error_message.is_none());
 
+        // 10. Test lyrics cache
+        let lyric_info = lux_core::traits::LyricInfo {
+            lyric: "[00:00.00] Test Lyric".to_string(),
+            tlyric: Some("[00:00.00] Translation".to_string()),
+            rlyric: None,
+            lxlyric: None,
+        };
+        assert!(insert_lyrics_cache("song123", "wy", &lyric_info).is_ok());
+        let cached = get_cached_lyrics("song123", "wy").unwrap();
+        assert!(cached.is_some());
+        let cached = cached.unwrap();
+        assert_eq!(cached.lyric, "[00:00.00] Test Lyric");
+        assert_eq!(cached.tlyric, Some("[00:00.00] Translation".to_string()));
+        assert!(cached.rlyric.is_none());
+        assert!(cached.lxlyric.is_none());
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
         unsafe {
-            env::remove_var("RUST_LX_HOME");
+            env::remove_var("ALX_HOME");
         }
     }
 }

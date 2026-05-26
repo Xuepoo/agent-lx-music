@@ -1,0 +1,196 @@
+use crate::library::db::{SearchCacheEntry, get_song_by_cli_id};
+use crate::source::SourceManager;
+use anyhow::{Result, anyhow};
+use colored::Colorize;
+use std::fs;
+
+pub async fn run(
+    id: Option<String>,
+    translated: bool,
+    romanized: bool,
+    save: bool,
+    json: bool,
+) -> Result<()> {
+    crate::library::db::init_db()?;
+
+    let song = if let Some(ref target_id) = id {
+        if let Some(s) = get_song_by_cli_id(target_id)? {
+            s
+        } else {
+            // Also check if it matches a song_id directly in the search cache
+            let conn = crate::library::db::get_db_conn()?;
+            let mut stmt = conn.prepare(
+                "SELECT cli_id, song_id, name, singer, source, interval, album_name,
+                        album_id, pic_url, songmid, hash, extra FROM search_cache
+                 WHERE song_id = ?1",
+            )?;
+            let mut rows = stmt.query([target_id])?;
+            if let Some(row) = rows.next()? {
+                SearchCacheEntry {
+                    cli_id: row.get(0)?,
+                    song_id: row.get(1)?,
+                    name: row.get(2)?,
+                    singer: row.get(3)?,
+                    source: row.get(4)?,
+                    interval: row.get(5)?,
+                    album_name: row.get(6)?,
+                    album_id: row.get(7)?,
+                    pic_url: row.get(8)?,
+                    songmid: row.get(9)?,
+                    hash: row.get(10)?,
+                    extra: row.get(11)?,
+                }
+            } else {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "error": format!("Song ID '{}' not found in cache. Run a search first.", target_id)
+                        })
+                    );
+                    std::process::exit(1);
+                } else {
+                    return Err(anyhow!(
+                        "Song ID '{}' not found in cache. Run a search first.",
+                        target_id
+                    ));
+                }
+            }
+        }
+    } else {
+        // Load from current.json
+        let paths = lux_core::config::resolve_paths();
+        let current_json_path = paths.cache_dir.join("current.json");
+        let song_opt: Option<SearchCacheEntry> = if current_json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&current_json_path) {
+                serde_json::from_str(&content).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let Some(s) = song_opt else {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "error": "No active song is playing and no song ID was provided."
+                    })
+                );
+                std::process::exit(1);
+            } else {
+                return Err(anyhow!(
+                    "No active song is playing and no song ID was provided."
+                ));
+            }
+        };
+        s
+    };
+
+    let mgr = SourceManager::new();
+    let lyric_info = mgr.resolve_lyric(&song.source, &song.song_id)?;
+
+    // Select which track to output
+    let (track_name, track_content) = if translated {
+        ("translated", lyric_info.tlyric.as_deref())
+    } else if romanized {
+        ("romanized", lyric_info.rlyric.as_deref())
+    } else {
+        ("main", Some(lyric_info.lyric.as_str()))
+    };
+
+    let content_to_print = match track_content {
+        Some(content) if !content.trim().is_empty() => content,
+        _ => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "song_id": song.song_id,
+                        "cli_id": song.cli_id,
+                        "name": song.name,
+                        "singer": song.singer,
+                        "track": track_name,
+                        "lyric": serde_json::Value::Null
+                    })
+                );
+                return Ok(());
+            } else {
+                if translated {
+                    return Err(anyhow!("No translated lyrics available for this song."));
+                } else if romanized {
+                    return Err(anyhow!("No romanized lyrics available for this song."));
+                } else {
+                    return Err(anyhow!("Lyrics are empty or not available."));
+                }
+            }
+        }
+    };
+
+    if save {
+        let config = lux_core::config::Config::load().unwrap_or_default();
+        let output_dir = config.get_resolved_download_dir();
+        let _ = fs::create_dir_all(&output_dir);
+
+        let clean_title = song.name.replace(['/', '\\'], "-");
+        let clean_singer = song.singer.replace(['/', '\\'], "-");
+        let final_name = config
+            .download
+            .filename_template
+            .replace("{singer}", &clean_singer)
+            .replace("{title}", &clean_title);
+
+        let suffix = if translated {
+            ".trans"
+        } else if romanized {
+            ".roma"
+        } else {
+            ""
+        };
+        let final_filename = format!("{}{}.lrc", final_name, suffix);
+        let final_path = output_dir.join(&final_filename);
+
+        fs::write(&final_path, content_to_print)?;
+
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "song_id": song.song_id,
+                    "cli_id": song.cli_id,
+                    "name": song.name,
+                    "singer": song.singer,
+                    "track": track_name,
+                    "saved_to": final_path.to_string_lossy()
+                })
+            );
+        } else {
+            println!(
+                "{} Saved {} lyrics to: {}",
+                "✓".green().bold(),
+                track_name,
+                final_path.display().to_string().cyan()
+            );
+        }
+    } else {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "song_id": song.song_id,
+                    "cli_id": song.cli_id,
+                    "name": song.name,
+                    "singer": song.singer,
+                    "track": track_name,
+                    "lyric": content_to_print
+                })
+            );
+        } else {
+            println!("{}", content_to_print);
+        }
+    }
+
+    Ok(())
+}

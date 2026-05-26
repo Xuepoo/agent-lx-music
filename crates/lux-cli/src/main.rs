@@ -12,6 +12,13 @@ use std::process;
 async fn main() {
     let args = cli::Cli::parse();
 
+    // Dynamically inject custom config path into environment to globally override paths
+    if let Some(ref custom_config) = args.config {
+        unsafe {
+            std::env::set_var("ALX_CONFIG", custom_config);
+        }
+    }
+
     // Setup color override
     let no_color = args.no_color || std::env::var("NO_COLOR").is_ok();
     if no_color {
@@ -26,13 +33,17 @@ async fn main() {
     match cmd::dispatch(args.command, args.json).await {
         Ok(_) => {
             if is_first_run && !args.quiet && !args.json {
-                println!("\n{} {}!", "✓".green().bold(), "rust-lx initialized".bold());
+                println!(
+                    "\n{} {}!",
+                    "✓".green().bold(),
+                    "agent-lx-music initialized".bold()
+                );
                 println!("  Config: {}", paths.config_file.display());
                 println!("  Data:   {}", paths.data_dir.display());
                 println!("\nGet started:");
-                println!("  rlx config                  Show current config");
-                println!("  rlx search <keyword>        Search for music");
-                println!("  rlx play <id>               Play a song\n");
+                println!("  alx config                  Show current config");
+                println!("  alx search <keyword>        Search for music");
+                println!("  alx play <id>               Play a song\n");
             }
             process::exit(0);
         }
