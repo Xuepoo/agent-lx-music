@@ -1,4 +1,4 @@
-# rust-lx
+# agent-lx-music
 
 A Unix-philosophy CLI music player powered by lx-music sources, written in Rust.
 
@@ -6,19 +6,19 @@ A Unix-philosophy CLI music player powered by lx-music sources, written in Rust.
 
 ```bash
 # Install
-cargo install rust-lx
+cargo install agent-lx-music
 
 # Add a music source
-rlx source add https://raw.githubusercontent.com/.../latest.js
+alx source add https://raw.githubusercontent.com/.../latest.js
 
 # Search and play
-rlx search "周杰伦 晴天"
-rlx play <song-id>
+alx search "周杰伦 晴天"
+alx play <song-id>
 ```
 
 ## What is this?
 
-`rust-lx` is a command-line music player that rewrites [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) as a terminal-native tool. It drops Electron entirely and delegates audio playback to mpv.
+`agent-lx-music` is a command-line music player that rewrites [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) as a terminal-native tool. It drops Electron entirely and delegates audio playback to mpv.
 
 **Key design decisions:**
 - JS music sources run in a [rquickjs](https://github.com/DelSkayn/rquickjs) sandbox (QuickJS engine)
@@ -31,11 +31,11 @@ rlx play <song-id>
 ## Project Structure (Cargo Workspace)
 
 ```
-rust-lx/
+agent-lx-music/
 ├── crates/
 │   ├── lux-core/      # Shared types, traits, config
 │   ├── lux-native/    # Native Rust platform parsers (kw, kg, wy, tx, mg)
-│   └── lux-cli/       # Main binary (rlx), rquickjs sandbox, mpv control
+│   └── lux-cli/       # Main binary (alx), rquickjs sandbox, mpv control
 ├── docs/              # Specification documents
 └── Cargo.toml         # Workspace root
 ```
