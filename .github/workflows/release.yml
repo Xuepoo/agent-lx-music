@@ -57,9 +57,6 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
       - name: Build Release Target
         run: cargo build --release --target ${{ matrix.target }} --bin alx
 
