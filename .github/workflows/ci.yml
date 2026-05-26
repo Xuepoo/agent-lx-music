@@ -24,9 +24,7 @@ jobs:
           sudo apt-get install -y libasound2-dev libmpv-dev mpv
 
       - name: Setup Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
