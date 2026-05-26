@@ -1,54 +1,78 @@
 # agent-lx-music
 
-A Unix-philosophy CLI music player powered by lx-music sources, written in Rust.
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [Français](README.fr.md) | [Español](README.es.md)
 
-## Quick Start
+A Unix-philosophy CLI music player powered by lx-music sources, written in Rust. It drops Electron entirely, running JS scrapers inside an isolated QuickJS sandbox and delegating high-fidelity audio playback to a headless `mpv` instance over a detached POSIX daemon loop.
+
+---
+
+## Key Features
+
+- **QuickJS Sandbox Integration**: Executes standard `lx-music` javascript sources securely inside a highly optimized [rquickjs](https://github.com/DelSkayn/rquickjs) sandbox environment.
+- **Decoupled POSIX Daemonization**: Spawns headless `mpv` playback loops inside detached `setsid` process groups, letting you manage and check playback states asynchronously without locking terminals.
+- **SQLite Transparent Caching**: Provisions a local database to store playlists, playback histories (with auto-purges), favorites, and transparently cache LRC lyrics for zero-network lookups.
+- **Static LRC Lyrics & Cover Downloads**: High-speed, high-reliability extraction of synchronized lyrics (with translation and romanized fallbacks) and Magic-Bytes based image suffix detection.
+- **Audio-Enabled Containerization**: Fully compatible with rootless Podman/Docker, enabling isolated runs with host PulseAudio/Pipewire audio pass-through.
+- **Multimodal Agent-Ready**: Integrates XDG-compliant, structured agent skills (`music-discovery`, `audio-analysis`, `listening-companion`) enabling multimodal LLMs to "listen" and curate your audio.
+
+---
+
+## Installation & Setup
+
+Build the project from source (requires Rust toolchain pre-installed):
 
 ```bash
-# Install
-cargo install agent-lx-music
+# Clone the repository
+git clone https://github.com/Xuepoo/agent-lx-music.git
+cd agent-lx-music
 
-# Add a music source
-alx source add https://raw.githubusercontent.com/.../latest.js
+# Build release target
+cargo build --release
 
-# Search and play
+# Run global help
+./target/release/alx --help
+```
+
+---
+
+## Quick Start Reference
+
+```bash
+# 1. Register a music source script
+alx source add ./my-sixyin-source.js
+
+# 2. Search across platforms (returns dynamic short CLI IDs)
 alx search "周杰伦 晴天"
-alx play <song-id>
+
+# 3. Play the resolved song via detached mpv daemon
+alx play <cli_id>
+
+# 4. Control playback asynchronously
+alx now                    # Show real-time progress card
+alx volume +10 / alx volume -10
+alx seek +30 / alx seek 2:30
+alx pause / alx resume / alx stop
+alx quit                   # Terminate the mpv daemon cleanly
+
+# 5. Retrieve lyrics & cover art
+alx lyric <cli_id>         # Print synchronized LRC lyrics
+alx lyric <cli_id> --save  # Export to .lrc file in download folder
+alx pic <cli_id> --save    # Download album cover with magic bytes validation
 ```
 
-## What is this?
-
-`agent-lx-music` is a command-line music player that rewrites [lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) as a terminal-native tool. It drops Electron entirely and delegates audio playback to mpv.
-
-**Key design decisions:**
-- JS music sources run in a [rquickjs](https://github.com/DelSkayn/rquickjs) sandbox (QuickJS engine)
-- Optional native Rust parsers for direct platform API access
-- mpv handles all audio playback via JSON IPC
-- XDG Base Directory Specification for all paths
-- SQLite for local data (playlists, history, favorites)
-- Pipe-friendly output (JSON, plain text)
-
-## Project Structure (Cargo Workspace)
-
-```
-agent-lx-music/
-├── crates/
-│   ├── lux-core/      # Shared types, traits, config
-│   ├── lux-native/    # Native Rust platform parsers (kw, kg, wy, tx, mg)
-│   └── lux-cli/       # Main binary (alx), rquickjs sandbox, mpv control
-├── docs/              # Specification documents
-└── Cargo.toml         # Workspace root
-```
+---
 
 ## Documentation
 
-- [Requirements](docs/REQUIREMENTS.md) — Full feature specification
-- [Architecture](docs/ARCHITECTURE.md) — Technical design and module breakdown
-- [CLI Reference](docs/CLI.md) — All commands and usage
-- [Source API Contract](docs/SOURCE-API.md) — JS source script interface
-- [Configuration](docs/CONFIG.md) — Config file and XDG paths
-- [Data Model](docs/DATA-MODEL.md) — SQLite schema and types
-- [Native API](docs/NATIVE-API.md) — Rust platform parser design
+All technical details, architectural blueprints, and contracts are located in the `docs` directory:
+- [Requirements Spec](docs/REQUIREMENTS.md) — Comprehensive feature breakdown
+- [Technical Architecture](docs/ARCHITECTURE.md) — Module decoupling and mpv IPC design
+- [CLI Reference Manual](docs/CLI.md) — Detailed subcommand and flag options
+- [Source Bridge API](docs/SOURCE-API.md) — JS engine execution contract
+- [XDG Path Configuration](docs/CONFIG.md) — Environment variables and path resolution
+- [SQLite Schema Model](docs/DATA-MODEL.md) — DB schema layout
+
+---
 
 ## License
 
