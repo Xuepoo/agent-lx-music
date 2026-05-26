@@ -17,60 +17,103 @@ A Unix-philosophy CLI music player powered by lx-music sources, written in Rust.
 
 ---
 
-## Installation & Setup
+## Quick Start
 
-Build the project from source (requires Rust toolchain pre-installed):
+### 1. Install External Dependencies
+
+`alx` requires underlying system audio drivers and a high-fidelity playback engine. Before compiling or running the project, make sure to install the following prerequisites:
+
+*   **`mpv`** *(Core Required)*: Runs in headless daemon mode to stream and decode audio.
+*   **`libmpv-dev` (or `mpv-devel`)** *(Compile Required)*: Native C headers for linking Rust's mpv APIs.
+*   **`alsa-lib` (or `libasound2-dev`)** *(Linux Required)*: Interface to connect with standard ALSA audio channels.
+*   **`beets`** *(Optional)*: Highly recommended if you want to sync, tag, and import metadata from local music libraries.
+
+#### Environment Setup Commands:
+
+*   **Debian / Ubuntu / Mint**:
+    ```bash
+    sudo apt update
+    sudo apt install -y libasound2-dev libmpv-dev mpv beets
+    ```
+*   **Fedora / RHEL / CentOS**:
+    ```bash
+    sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
+    ```
+*   **Arch Linux / Manjaro**:
+    ```bash
+    sudo pacman -Sy alsa-lib mpv beets
+    ```
+*   **Alpine Linux**:
+    ```bash
+    apk add alsa-lib-dev mpv-dev mpv beets
+    ```
+*   **macOS (via Homebrew)**:
+    ```bash
+    brew install mpv beets
+    ```
+
+---
+
+### 2. Clone & Build from Source
+
+Once the system dependencies are installed, you can clone and build the binary:
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/Xuepoo/agent-lx-music.git
 cd agent-lx-music
 
-# Build release target
+# 2. Build optimized release target
 cargo build --release
 
-# Run global help
+# 3. View global options and command list
 ./target/release/alx --help
+```
+*(Note: You can also download pre-built standalone binaries or `.deb` / `.rpm` / `.apk` packages directly from the GitHub [Releases](https://github.com/Xuepoo/agent-lx-music/releases) page.)*
+
+---
+
+### 3. Bootstrap Playback in 3 Steps
+
+```bash
+# Step 1: Add a custom JS platform source scraper (e.g. Sixyin JS source)
+alx source add https://raw.githubusercontent.com/.../sixyin-source.js
+
+# Step 2: Search for music across platforms
+alx search "周杰伦 晴天"
+# The query returns a short 4-character CLI ID (e.g., c12a)
+
+# Step 3: Detach and play the resolved audio in background daemon
+alx play c12a
 ```
 
 ---
 
-## Quick Start Reference
+## Quick Reference Commands
 
 ```bash
-# 1. Register a music source script
-alx source add ./my-sixyin-source.js
-
-# 2. Search across platforms (returns dynamic short CLI IDs)
-alx search "周杰伦 晴天"
-
-# 3. Play the resolved song via detached mpv daemon
-alx play <cli_id>
-
-# 4. Control playback asynchronously
-alx now                    # Show real-time progress card
+# 1. Playback & controls
+alx now                    # Show real-time playback status progress card
 alx volume +10 / alx volume -10
 alx seek +30 / alx seek 2:30
 alx pause / alx resume / alx stop
-alx quit                   # Terminate the mpv daemon cleanly
+alx quit                   # Terminate the mpv backend daemon cleanly
 
-# 5. Retrieve lyrics & cover art
-alx lyric <cli_id>         # Print synchronized LRC lyrics
-alx lyric <cli_id> --save  # Export to .lrc file in download folder
-alx pic <cli_id> --save    # Download album cover with magic bytes validation
+# 2. Retrieve lyrics & cover art
+alx lyric <cli_id>         # Fetch and print synchronized LRC lyrics
+alx lyric <cli_id> --save  # Export LRC lyric to a local .lrc file in download folder
+alx pic <cli_id> --save    # Download album art with magic bytes file suffix validation
 ```
 
 ---
 
 ## Documentation
 
-All technical details, architectural blueprints, and contracts are located in the `docs` directory:
-- [Requirements Spec](docs/REQUIREMENTS.md) — Comprehensive feature breakdown
-- [Technical Architecture](docs/ARCHITECTURE.md) — Module decoupling and mpv IPC design
-- [CLI Reference Manual](docs/CLI.md) — Detailed subcommand and flag options
-- [Source Bridge API](docs/SOURCE-API.md) — JS engine execution contract
-- [XDG Path Configuration](docs/CONFIG.md) — Environment variables and path resolution
-- [SQLite Schema Model](docs/DATA-MODEL.md) — DB schema layout
+All architectural specs, command options, and data schemas are documented in detail inside the `docs/` directory:
+- [CLI Reference Manual](docs/CLI.md) — Detailed subcommand descriptions and global flags
+- [Source Bridge API](docs/SOURCE-API.md) — JavaScript bridge execution contracts inside isolated sandboxes
+- [XDG Path Configuration](docs/CONFIG.md) — Environment variables, default directories, and resolving rules
+- [SQLite Schema Model](docs/DATA-MODEL.md) — SQLite database schema definitions and indexing topological graphs
 
 ---
 
