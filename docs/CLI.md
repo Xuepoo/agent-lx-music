@@ -45,24 +45,24 @@ alx source list --json
 注销并删除已安装的指定音源。
 
 ```bash
-alx source remove sixyin_v1.2.1
-alx source remove sixyin_v1.2.1 --yes
+alx source remove custom_source_v1.0.0
+alx source remove custom_source_v1.0.0 --yes
 ```
 
 ### `alx source update [ID]`
 检查并更新已配置 URL 的音源脚本。
 
 ```bash
-alx source update sixyin_v1.2.1     # 更新特定音源
-alx source update --all              # 检查并更新所有有远程 URL 的音源
+alx source update custom_source_v1.0.0     # 更新特定音源
+alx source update --all                    # 检查并更新所有有远程 URL 的音源
 ```
 
 ### `alx source info <ID>`
 展示指定音源的完整沙箱元数据及支持的平台信息。
 
 ```bash
-alx source info sixyin_v1.2.1
-alx source info sixyin_v1.2.1 --json
+alx source info custom_source_v1.0.0
+alx source info custom_source_v1.0.0 --json
 ```
 
 ---
@@ -74,14 +74,14 @@ alx source info sixyin_v1.2.1 --json
 
 ```bash
 alx search "晴天 周杰伦"
-alx search "晴天" --source wy
+alx search "晴天" --source platformA
 alx search "晴天" --page 2
 alx search "晴天" --limit 50
 alx search "晴天" --json
 alx search "晴天" --id-only
 ```
 选项：
-*   `-s, --source <SOURCE>` — 过滤检索的音乐平台：`all`（并行检索所有平台）、`kw` (酷我)、`kg` (酷狗)、`tx` (企鹅)、`wy` (网易)、`mg` (咪咕) [默认: all]
+*   `-s, --source <SOURCE>` — 过滤检索的音乐平台标识符：`all`（并行检索所有平台）、或者自定义 JS 音源脚本注册的具体平台标识符（如 `platformA`、`platformB` 等） [默认: all]
 *   `-p, --page <N>` — 搜索结果翻页码 [默认: 1]
 *   `-l, --limit <N>` — 单页返回条目数量 (最大 100) [默认: 30]
 *   `--id-only` — 仅输出 4 位 CLI ID，每行一个，便于 Shell 管道脚本组合
@@ -362,9 +362,9 @@ alx pic abc123 --save --output ~/my-covers/
 
 ```bash
 alx board                          # 打印所有支持的音乐榜单
-alx board --source wy              # 单独拉取网易云音乐当前的所有榜单
-alx board --source wy --id <bid>   # 精确检索列出网易云指定榜单内的歌曲
-alx board --source wy --id <bid> --play  # 一键播放该排行榜所有曲目
+alx board --source platformA              # 单独拉取指定音乐平台当前的所有榜单
+alx board --source platformA --id <bid>   # 精确检索列出该平台指定榜单内的歌曲
+alx board --source platformA --id <bid> --play  # 一键播放该排行榜所有曲目
 ```
 
 ### `alx discover` / `alx explore`
@@ -372,8 +372,8 @@ alx board --source wy --id <bid> --play  # 一键播放该排行榜所有曲目
 
 ```bash
 alx discover                       # 浏览当前各大平台主页首发的推荐歌单
-alx discover --source kw           # 酷我平台的歌单推荐
-alx discover --source kw --tag 华语  # 按照分类标签过滤歌单
+alx discover --source platformA           # 指定平台的歌单推荐
+alx discover --source platformA --tag 华语  # 按照分类标签过滤歌单
 alx discover show <playlist-id>    # 列出该推荐歌单内包含的明细歌曲
 alx discover play <playlist-id>    # 一键顺序播放该歌单
 ```

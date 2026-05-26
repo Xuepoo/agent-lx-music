@@ -1,6 +1,6 @@
 # JS 音源沙箱桥接 API 规范
 
-`alx` 支持载入符合 `lx-music` 规范的自定义 JavaScript 音源脚本。宿主程序内部通过内置的轻量 QuickJS 解析引擎，在安全隔离的沙箱环境内运行脚本，并通过 `globalThis.lx` 对象向脚本注入标准的底层系统接口调用与回调契约。
+`alx` 支持载入符合开放通用音源规范的自定义 JavaScript 音源脚本。宿主程序内部通过内置的轻量 QuickJS 解析引擎，在安全隔离的沙箱环境内运行脚本，并通过 `globalThis.lx` 对象向脚本注入标准的底层系统接口调用与回调契约。
 
 ---
 
@@ -9,7 +9,7 @@
 ### 1.1 核心方法 (Core Methods)
 
 #### `lx.request(url, options, callback)`
-发起跨域异步网络请求。该方法在接口规范上与 `lx-music-desktop` 内部使用的 `needle` 库完全等价。
+发起跨域异步网络请求。该方法在接口规范上与标准通用客户端网络库完全等价。
 
 ```typescript
 lx.request(
@@ -60,8 +60,8 @@ lx.send('inited', {
   status: true,
   openDevTools: false,
   sources: {
-    kw: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac'] },
-    wy: { type: 'music', actions: ['musicUrl', 'lyric'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
+    platformA: { type: 'music', actions: ['musicUrl'], qualitys: ['128k', '320k', 'flac'] },
+    platformB: { type: 'music', actions: ['musicUrl', 'lyric'], qualitys: ['128k', '320k', 'flac', 'flac24bit'] },
   }
 })
 ```
@@ -223,8 +223,8 @@ send(EVENT_NAMES.inited, {
   status: true,
   openDevTools: false,
   sources: {
-    wy: {
-      name: "网易云音乐",
+    platformA: {
+      name: "演示平台A",
       type: "music",
       actions: ["musicUrl"],
       qualitys: ["128k", "320k", "flac"]

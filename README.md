@@ -76,8 +76,8 @@ cargo build --release
 ### 3. 三步极速配置开歌 (Bootstrap)
 
 ```bash
-# 第一步：获取并注册一个自定义的音乐解析源脚本 (以六音 JS 源为例)
-alx source add https://raw.githubusercontent.com/.../sixyin-source.js
+# 第一步：获取并注册一个自定义的外部解析源脚本
+alx source add https://example.com/custom-source.js
 
 # 第二步：全网搜索您想听的音乐
 alx search "周杰伦 晴天"

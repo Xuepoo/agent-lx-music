@@ -13,7 +13,7 @@
 数据存储根目录: ~/.local/share/agent-lx-music/
   ├── agent-lx-music.db                  # SQLite 数据库文件 (包含播放列表、历史等)
   └── sources/                            # 自定义 JS 音源脚本文件夹
-      ├── sixyin_v1.2.1.js
+      ├── custom_source_v1.0.0.js
       └── custom_plugin.js
 
 临时缓存根目录: ~/.cache/agent-lx-music/
@@ -34,7 +34,7 @@
 # ─── 1. 音频源与解析设置 (Source Settings) ─────────────────────────
 
 [source]
-# 默认搜索的平台: "all" (并行多平台检索并合并)，或指定具体平台 "kw", "wy", "kg", "tx", "mg"
+# 默认搜索的平台: "all" (并行多平台检索并合并)，或指定具体自定义音源平台标识符
 default_source = "all"
 
 # 默认请求的音频解析音质
@@ -48,7 +48,7 @@ quality_fallback = ["320k", "128k", "flac"]
 js_priority = true
 
 # 自定义音源的解析调用优先级顺序，未列出的脚本音源将默认在尾部以字母表顺序载入
-priority = ["sixyin_v1.2.1", "custom_plugin"]
+priority = ["custom_source_v1.0.0", "custom_plugin"]
 
 
 # ─── 2. 播放器底层配置 (Player Settings) ─────────────────────────
@@ -101,7 +101,7 @@ save_cover_file = false           # 下载音频的同时，在同目录下保�
 max_concurrent = 3                # 允许最大并行下载任务数
 skip_existing = true              # 如果本地对应目标路径下文件已存在，则静默跳过
 use_other_source = true           # 当选定的当前解析音源下载失效时，自动跨平台查找同名同歌手的可用音频降级补充
-group_by_source = false           # 是否在下载目录下为每个平台建立独立的子文件夹 (如 kw/, wy/)
+group_by_source = false           # 是否在下载目录下为每个自定义音源平台建立独立的子文件夹 (如 platformA/, platformB/)
 timeout = 60                      # 下载单个分片的网络超时时间 (秒)
 
 

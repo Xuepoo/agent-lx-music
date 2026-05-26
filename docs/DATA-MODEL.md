@@ -13,7 +13,7 @@
 
 ```sql
 CREATE TABLE IF NOT EXISTS sources (
-    id          TEXT PRIMARY KEY,       -- 音源唯一内部 ID (例如: "sixyin_v1.2.1")
+    id          TEXT PRIMARY KEY,       -- 音源唯一内部 ID (例如: "custom_source_v1.0.0")
     name        TEXT NOT NULL,          -- 脚本头部声明的 @name
     version     TEXT,                   -- 脚本版本号 @version
     author      TEXT,                   -- 作者名 @author
@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS sources (
     script_path TEXT NOT NULL,          -- 脚本落地保存的绝对路径 (位于 ~/.local/share/agent-lx-music/sources/ 下)
     source_url  TEXT,                   -- 原始下载获取 URL
     content_hash TEXT NOT NULL,         -- 脚本内容的 MD5 校验码，防止脚本被恶意篡改
-    platforms   TEXT NOT NULL,          -- 该音源支持的平台，以 JSON Array 格式存储：["kw","wy"]
-    qualities   TEXT NOT NULL,          -- 该音源各平台支持的音质，JSON Object 格式存储：{"kw":["128k","320k"],"wy":["128k","flac"]}
+    platforms   TEXT NOT NULL,          -- 该音源支持的平台，以 JSON Array 格式存储：["platformA","platformB"]
+    qualities   TEXT NOT NULL,          -- 该音源各平台支持的音质，JSON Object 格式存储：{"platformA":["128k","320k"],"platformB":["128k","flac"]}
     enabled     INTEGER NOT NULL DEFAULT 1, -- 该音源是否处于启用状态 (1=启用, 0=禁用)
     created_at  TEXT NOT NULL,          -- 记录建立时间 (标准 ISO 8601 格式)
     updated_at  TEXT NOT NULL           -- 记录最后一次更新时间
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS search_cache (
     song_id     TEXT NOT NULL,          -- 音乐平台内的原始歌曲 ID
     name        TEXT NOT NULL,          -- 歌名
     singer      TEXT NOT NULL,          -- 歌手/艺术家名字
-    source      TEXT NOT NULL,          -- 音频物理来源平台 (如 "kw", "wy")
+    source      TEXT NOT NULL,          -- 音频物理来源平台 (如 "platformA", "platformB")
     interval    TEXT,                   -- 歌曲时长排版表示 (如 "03:55")
     album_name  TEXT,                   -- 关联专辑名称
     album_id    TEXT,                   -- 关联专辑 ID
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS downloads (
 
 $$\text{Song Entity Key} \equiv (\text{song\_id}, \text{source})$$
 
-其中 `source` 是代表具体音乐物理源平台（如 `kw`, `wy`, `kg`）的平台标识符，或者是对于通过自定义脚本解析的第三方源而言的具体音源脚本 `id`。
+其中 `source` 是代表具体音乐物理源平台（如 `platformA`, `platformB` 等）的平台标识符，或者是对于通过自定义脚本解析的第三方源而言的具体音源脚本 `id`。
 
 ---
 

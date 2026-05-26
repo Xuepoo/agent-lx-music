@@ -2,13 +2,13 @@
 
 [English](README.en.md) | [简体中文](README.md)
 
-A Unix-philosophy CLI music player powered by lx-music sources, written in Rust. It drops Electron entirely, running JS scrapers inside an isolated QuickJS sandbox and delegating high-fidelity audio playback to a headless `mpv` instance over a detached POSIX daemon loop.
+A Unix-philosophy CLI music player powered by custom music sources, written in Rust. It drops Electron entirely, running JS scrapers inside an isolated QuickJS sandbox and delegating high-fidelity audio playback to a headless `mpv` instance over a detached POSIX daemon loop.
 
 ---
 
 ## Key Features
 
-- **QuickJS Sandbox Integration**: Executes standard `lx-music` javascript sources securely inside a highly optimized [rquickjs](https://github.com/DelSkayn/rquickjs) sandbox environment.
+- **QuickJS Sandbox Integration**: Executes standard custom javascript music sources securely inside a highly optimized [rquickjs](https://github.com/DelSkayn/rquickjs) sandbox environment.
 - **Decoupled POSIX Daemonization**: Spawns headless `mpv` playback loops inside detached `setsid` process groups, letting you manage and check playback states asynchronously without locking terminals.
 - **SQLite Transparent Caching**: Provisions a local database to store playlists, playback histories (with auto-purges), favorites, and transparently cache LRC lyrics for zero-network lookups.
 - **Static LRC Lyrics & Cover Downloads**: High-speed, high-reliability extraction of synchronized lyrics (with translation and romanized fallbacks) and Magic-Bytes based image suffix detection.
@@ -76,8 +76,8 @@ cargo build --release
 ### 3. Bootstrap Playback in 3 Steps
 
 ```bash
-# Step 1: Add a custom JS platform source scraper (e.g. Sixyin JS source)
-alx source add https://raw.githubusercontent.com/.../sixyin-source.js
+# Step 1: Add a custom JS platform source scraper
+alx source add https://example.com/custom-source.js
 
 # Step 2: Search for music across platforms
 alx search "周杰伦 晴天"
