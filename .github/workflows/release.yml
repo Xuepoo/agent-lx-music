@@ -53,9 +53,9 @@ jobs:
           sudo apt-get install -y libasound2-dev libmpv-dev
 
       - name: Setup Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
