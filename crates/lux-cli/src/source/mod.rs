@@ -89,6 +89,11 @@ impl SourceManager {
         platform: &str,
         song_id: &str,
     ) -> Result<lux_core::traits::LyricInfo> {
+        // 0. Check local SQLite cache first
+        if let Ok(Some(cached)) = crate::library::db::get_cached_lyrics(song_id, platform) {
+            return Ok(cached);
+        }
+
         // 1. Fetch installed JS sources from local database
         let db_entries = crate::library::db::list_sources().unwrap_or_default();
 
@@ -134,19 +139,24 @@ impl SourceManager {
                             .get("lxlyric")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
-                        return Ok(lux_core::traits::LyricInfo {
+
+                        let info = lux_core::traits::LyricInfo {
                             lyric,
                             tlyric,
                             rlyric,
                             lxlyric,
-                        });
+                        };
+                        let _ = crate::library::db::insert_lyrics_cache(song_id, platform, &info);
+                        return Ok(info);
                     } else {
-                        return Ok(lux_core::traits::LyricInfo {
+                        let info = lux_core::traits::LyricInfo {
                             lyric: lyric_str,
                             tlyric: None,
                             rlyric: None,
                             lxlyric: None,
-                        });
+                        };
+                        let _ = crate::library::db::insert_lyrics_cache(song_id, platform, &info);
+                        return Ok(info);
                     }
                 }
             }
@@ -162,6 +172,7 @@ impl SourceManager {
                     rt.block_on(async { native_src.get_lyric(song_id).await })
                 });
                 if let Ok(Some(info)) = result {
+                    let _ = crate::library::db::insert_lyrics_cache(song_id, platform, &info);
                     return Ok(info);
                 }
             }

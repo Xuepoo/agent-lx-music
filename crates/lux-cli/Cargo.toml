@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "rlx"
+name = "alx"
 path = "src/main.rs"
 
 [features]
