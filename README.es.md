@@ -74,6 +74,9 @@ Todos los detalles de diseño, API y modelos de datos están ubicados en la carp
 
 ---
 
-## Licencia
+## Licencia y Descargo de Responsabilidad
 
 Este proyecto está bajo la licencia MIT.
+
+### Descargo de Responsabilidad y Acuerdo Adicional
+Por favor, lea atentamente nuestro [Acuerdo del Proyecto y Descargo de Responsabilidad](DISCLAIMER.md) (en inglés) para comprender los términos de uso relacionados con las fuentes de música de terceros, el requisito de eliminar datos protegidos por derechos de autor dentro de las 24 horas, la prohibición de uso comercial y los propósitos de investigación técnica.
