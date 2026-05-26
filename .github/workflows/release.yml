@@ -14,14 +14,16 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: alx-linux-x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            artifact_name: alx-linux-aarch64
+          # NOTE: ARM runner temporarily disabled due to GitHub 403 errors
+          # - os: ubuntu-24.04-arm
+          #   target: aarch64-unknown-linux-gnu
+          #   artifact_name: alx-linux-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: alx-windows-x86_64.exe
