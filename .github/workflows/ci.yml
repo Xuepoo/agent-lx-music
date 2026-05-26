@@ -22,9 +22,6 @@ jobs:
           rustup default stable
           rustup component add clippy rustfmt
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
       - name: Check formatting
         run: cargo fmt -- --check
 
