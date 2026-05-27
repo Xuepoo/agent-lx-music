@@ -121,17 +121,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish lux-core
-        run: cargo publish -p lux-core --token ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish -p lux-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish lux-native
-        run: cargo publish -p lux-native --token ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish -p lux-native
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish agent-lx-music
-        run: cargo publish -p agent-lx-music --token ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish -p agent-lx-music
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
