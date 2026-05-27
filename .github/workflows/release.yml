@@ -158,6 +158,11 @@ jobs:
           git config --global user.name "Xuepoo (CI)"
           git config --global user.email "xuepoofoter@gmail.com"
 
+      - name: Create Arch AUR builder user
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
       - name: Update AUR source package (agent-lx-music)
         run: |
           git clone ssh://aur@aur.archlinux.org/agent-lx-music.git aur-src
@@ -166,7 +171,6 @@ jobs:
           CLEAN_VERSION=${CLEAN_VERSION#v}
           sed -i "s/^pkgver=.*/pkgver=${CLEAN_VERSION}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          useradd -m builder && echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           chown -R builder:builder .
           su builder -c "updpkgsums && makepkg --printsrcinfo > .SRCINFO"
           git add PKGBUILD .SRCINFO
@@ -181,7 +185,6 @@ jobs:
           CLEAN_VERSION=${CLEAN_VERSION#v}
           sed -i "s/^pkgver=.*/pkgver=${CLEAN_VERSION}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          useradd -m builder && echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           chown -R builder:builder .
           su builder -c "updpkgsums && makepkg --printsrcinfo > .SRCINFO"
           git add PKGBUILD .SRCINFO
