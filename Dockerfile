@@ -1,8 +1,8 @@
 # Stage 1: Build
-FROM docker.io/library/rust:1.85-bookworm AS builder
+FROM docker.io/library/rust:1.88-bookworm AS builder
 WORKDIR /app
 COPY . .
-RUN apt-get update && apt-get install -y pkg-config libasound2-dev libmpv-dev && cargo build --release --bin alx
+RUN apt-get update && apt-get install -y pkg-config libasound2-dev libmpv-dev clang libclang-dev && cargo build --release --bin alx
 
 # Stage 2: Runtime
 FROM docker.io/library/debian:bookworm-slim

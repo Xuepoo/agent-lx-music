@@ -1,0 +1,6 @@
+target/
+.git/
+tmp/
+.github/
+.agents/
+.antigravitycli/
