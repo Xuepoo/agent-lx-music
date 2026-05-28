@@ -38,7 +38,7 @@ struct TestResultEntry {
 }
 
 #[allow(clippy::collapsible_if)]
-pub fn run(action: SourceAction, json: bool) -> Result<()> {
+pub async fn run(action: SourceAction, json: bool) -> Result<()> {
     match action {
         SourceAction::Add { path_or_url } => {
             // Ensure database schema exists
@@ -113,7 +113,6 @@ pub fn run(action: SourceAction, json: bool) -> Result<()> {
         }
         SourceAction::Update { id, all } => {
             crate::library::db::init_db()?;
-            let rt = tokio::runtime::Handle::current();
             let client = reqwest::Client::new();
 
             let targets = if all {
@@ -147,7 +146,7 @@ pub fn run(action: SourceAction, json: bool) -> Result<()> {
                     println!("Fetching updates for source '{}' from {}...", entry.id, url);
                 }
 
-                let fetch_res = rt.block_on(async { client.get(&url).send().await?.text().await });
+                let fetch_res = client.get(&url).send().await?.text().await;
 
                 match fetch_res {
                     Ok(new_script) => {

@@ -248,7 +248,7 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             }
         }
         Commands::Source { action } => {
-            source::run(action, json)?;
+            source::run(action, json).await?;
         }
         Commands::Download { action } => {
             download::run(action, json).await?;

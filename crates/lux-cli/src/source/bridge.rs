@@ -41,7 +41,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                         s.push(' ');
                     }
                 }
-                println!("[JS] {}", s.trim_end());
+                eprintln!("[JS] {}", s.trim_end());
                 Ok(())
             },
         ),
