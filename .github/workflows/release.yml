@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Setup Rust toolchain
         run: |
@@ -80,7 +80,7 @@ jobs:
           ./nfpm pkg --packager archlinux --target alx-linux-${PKG_ARCH}.pkg.tar.zst
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.4.0
         with:
           name: ${{ matrix.artifact_name }}
           path: |
@@ -98,7 +98,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.8
         with:
           path: artifacts
 
@@ -115,7 +115,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
