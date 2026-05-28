@@ -75,7 +75,11 @@ impl MusicSource for NetEaseSource {
                     album_name,
                     album_id,
                     interval: Some(interval),
-                    pic_url: song["album"]["picUrl"].as_str().map(|s| s.to_string()),
+                    pic_url: song["album"]["picUrl"]
+                        .as_str()
+                        .or_else(|| song["album"]["pic"].as_str())
+                        .or_else(|| song["album"]["artist"]["img1v1Url"].as_str())
+                        .map(|s| s.to_string()),
                     hash: None,
                     extra: None,
                 });

@@ -215,8 +215,9 @@ pub async fn run(
                                         .as_str()
                                         .or_else(|| item["albumid"].as_str())
                                         .map(|s| s.to_string());
-                                    let pic_url = item["picUrl"]
+                                    let pic_url = item["pic"]
                                         .as_str()
+                                        .or_else(|| item["picUrl"].as_str())
                                         .or_else(|| item["img"].as_str())
                                         .map(|s| s.to_string());
 

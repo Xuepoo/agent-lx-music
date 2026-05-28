@@ -420,13 +420,13 @@ impl MpvClient {
 
     pub fn next(&self) -> Result<()> {
         self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")])?;
+        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")]);
         Ok(())
     }
 
     pub fn prev(&self) -> Result<()> {
         self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")])?;
+        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")]);
         Ok(())
     }
 
