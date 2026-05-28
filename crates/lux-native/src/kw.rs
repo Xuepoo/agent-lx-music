@@ -95,11 +95,19 @@ impl MusicSource for KuwoSource {
                     album_name,
                     album_id,
                     interval: Some(interval),
-                    pic_url: item["WEBPIC"]
+                    pic_url: item["hts_MVPIC"]
                         .as_str()
+                        .or_else(|| item["WEBPIC"].as_str())
                         .or_else(|| item["webpic"].as_str())
                         .or_else(|| item["pic"].as_str())
-                        .map(|s| s.to_string()),
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            item["web_albumpic_short"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(|s| format!("https://img4.kuwo.cn/wmvpic/{}", s))
+                        }),
                     hash: None,
                     extra: None,
                 });

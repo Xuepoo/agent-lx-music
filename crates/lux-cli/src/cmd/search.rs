@@ -219,6 +219,7 @@ pub async fn run(
                                         .as_str()
                                         .or_else(|| item["picUrl"].as_str())
                                         .or_else(|| item["img"].as_str())
+                                        .filter(|s| !s.is_empty())
                                         .map(|s| s.to_string());
 
                                     let interval = if let Some(sec_str) = item["interval"].as_str()
