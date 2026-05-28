@@ -265,7 +265,12 @@ pub fn ensure_daemon_running() -> Result<()> {
         if let Ok(pid_str) = fs::read_to_string(&pid_file) {
             if let Ok(pid) = pid_str.trim().parse::<i32>() {
                 // Check if pid is running in system (using kill(pid, 0) logic or standard command)
-                let status = Command::new("kill").arg("-0").arg(pid.to_string()).status();
+                let status = Command::new("kill")
+                    .arg("-0")
+                    .arg(pid.to_string())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
                 if let Ok(exit_status) = status {
                     !exit_status.success()
                 } else {

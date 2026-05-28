@@ -195,6 +195,14 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
                         &client.socket_path,
                         vec![serde_json::json!("playlist-shuffle")],
                     );
+                    let _ = crate::player::ipc::send_mpv_command(
+                        &client.socket_path,
+                        vec![
+                            serde_json::json!("set_property"),
+                            serde_json::json!("shuffle"),
+                            serde_json::json!(true),
+                        ],
+                    );
                     if !json {
                         println!("Shuffle mode enabled.");
                     } else {

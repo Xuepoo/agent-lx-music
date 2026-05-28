@@ -40,6 +40,8 @@ pub fn get_db_conn() -> Result<Connection> {
         fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(&paths.db_file)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
     Ok(conn)
 }
 
@@ -801,6 +803,31 @@ pub fn delete_playlist(name: &str) -> Result<()> {
     let rows = conn.execute("DELETE FROM playlists WHERE name = ?1", params![name])?;
     if rows == 0 {
         return Err(anyhow::anyhow!("Playlist '{}' not found", name));
+    }
+    Ok(())
+}
+
+pub fn rename_playlist(old_name: &str, new_name: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    let exists_new: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM playlists WHERE name = ?1",
+        params![new_name],
+        |row| row.get(0),
+    )?;
+    if exists_new > 0 {
+        return Err(anyhow::anyhow!(
+            "Playlist with name '{}' already exists",
+            new_name
+        ));
+    }
+
+    let now = chrono::Local::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE playlists SET name = ?1, updated_at = ?2 WHERE name = ?3",
+        params![new_name, now, old_name],
+    )?;
+    if rows == 0 {
+        return Err(anyhow::anyhow!("Playlist '{}' not found", old_name));
     }
     Ok(())
 }
