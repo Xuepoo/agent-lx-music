@@ -289,22 +289,70 @@ impl MpvClient {
         } else if val.contains(':') {
             let parts: Vec<&str> = val.split(':').collect();
             if parts.len() == 2 {
-                let mins: f64 = parts[0].parse()?;
-                let secs: f64 = parts[1].parse()?;
+                let mins: f64 = parts[0]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid minutes"))?;
+                let secs: f64 = parts[1]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid seconds"))?;
+                if mins < 0.0 || !(0.0..60.0).contains(&secs) {
+                    return Err(anyhow::anyhow!(
+                        "Invalid seek time: seconds must be less than 60 and both values must be non-negative"
+                    ));
+                }
                 let total = mins * 60.0 + secs;
                 let _ = ipc::send_mpv_command(
                     &self.socket_path,
                     vec![json!("seek"), json!(total), json!("absolute")],
                 )?;
+            } else if parts.len() == 3 {
+                let hours: f64 = parts[0]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid hours"))?;
+                let mins: f64 = parts[1]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid minutes"))?;
+                let secs: f64 = parts[2]
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("Invalid seconds"))?;
+                if hours < 0.0 || !(0.0..60.0).contains(&mins) || !(0.0..60.0).contains(&secs) {
+                    return Err(anyhow::anyhow!(
+                        "Invalid seek time: minutes and seconds must be less than 60 and all values must be non-negative"
+                    ));
+                }
+                let total = hours * 3600.0 + mins * 60.0 + secs;
+                let _ = ipc::send_mpv_command(
+                    &self.socket_path,
+                    vec![json!("seek"), json!(total), json!("absolute")],
+                )?;
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Invalid seek time format: use MM:SS or HH:MM:SS"
+                ));
             }
         } else if val.ends_with('%') {
-            let percent: f64 = val.trim_end_matches('%').parse()?;
+            let percent: f64 = val
+                .trim_end_matches('%')
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid percentage"))?;
+            if !(0.0..=100.0).contains(&percent) {
+                return Err(anyhow::anyhow!(
+                    "Invalid seek percentage: must be between 0 and 100"
+                ));
+            }
             let _ = ipc::send_mpv_command(
                 &self.socket_path,
                 vec![json!("seek"), json!(percent), json!("absolute-percent")],
             )?;
         } else {
-            let secs: f64 = val.parse()?;
+            let secs: f64 = val
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid seconds"))?;
+            if secs < 0.0 {
+                return Err(anyhow::anyhow!(
+                    "Invalid seek time: seconds must be non-negative"
+                ));
+            }
             let _ = ipc::send_mpv_command(
                 &self.socket_path,
                 vec![json!("seek"), json!(secs), json!("absolute")],

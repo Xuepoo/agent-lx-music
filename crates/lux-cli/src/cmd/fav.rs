@@ -21,7 +21,7 @@ pub async fn run(action: FavAction, json: bool) -> Result<()> {
                 playlist::run(
                     PlaylistAction::Add {
                         playlist: "Favorites".to_string(),
-                        id: cli_id,
+                        ids: vec![cli_id],
                     },
                     json,
                 )

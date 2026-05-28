@@ -80,15 +80,20 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                 println!("✓ Playlist \"{}\" deleted.", name.red().bold());
             }
         }
-        PlaylistAction::Add { playlist, id } => {
-            let song = db::get_song_by_cli_id(&id)?.ok_or_else(|| {
-                anyhow!(
-                    "Song with CLI ID '{}' not found in cache. Search first.",
-                    id
-                )
-            })?;
+        PlaylistAction::Add { playlist, ids } => {
+            db::init_db()?;
+            let mut added_songs = Vec::new();
+            for id in &ids {
+                let song = db::get_song_by_cli_id(id)?.ok_or_else(|| {
+                    anyhow!(
+                        "Song with CLI ID '{}' not found in cache. Search first.",
+                        id
+                    )
+                })?;
 
-            db::add_to_playlist(&playlist, &song)?;
+                db::add_to_playlist(&playlist, &song)?;
+                added_songs.push(song.name.clone());
+            }
 
             if json {
                 println!(
@@ -96,13 +101,14 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                     serde_json::json!({
                         "status": "added",
                         "playlist": playlist,
-                        "song": song.name
+                        "songs": added_songs
                     })
                 );
             } else {
                 println!(
-                    "✓ Added \"{} - {}\" to playlist \"{}\".",
-                    song.singer, song.name, playlist
+                    "✓ Added {} songs to playlist \"{}\".",
+                    added_songs.len(),
+                    playlist
                 );
             }
         }
@@ -182,6 +188,12 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                 );
             }
 
+            // Clear queue in mpv
+            let _ = crate::player::ipc::send_mpv_command(
+                &client.socket_path,
+                vec![serde_json::json!("playlist-clear")],
+            );
+
             let resolved_first =
                 mgr.resolve_url(&first.source, &first.song_id, config.source.default_quality)?;
 
@@ -198,14 +210,23 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                 );
             }
 
+            let mut added_songs = vec![first.clone()];
+
             // Lazy append next songs asynchronously to ensure fast startup
             for song in songs.iter().skip(1) {
                 if let Ok(resolved_url) =
                     mgr.resolve_url(&song.source, &song.song_id, config.source.default_quality)
                 {
                     let _ = client.append_file_or_url(&resolved_url);
+                    added_songs.push(song.clone());
                 }
             }
+
+            let updated_queue = crate::cmd::queue::PlayQueue {
+                songs: added_songs,
+                current_index: Some(0),
+            };
+            let _ = crate::cmd::queue::save_queue(&updated_queue);
 
             if json {
                 println!(

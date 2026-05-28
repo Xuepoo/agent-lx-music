@@ -173,13 +173,30 @@ pub async fn run(
 
     // Case C: Direct link or local file (First element)
     let first = &id_or_urls[0];
-    if first.starts_with("http://") || first.starts_with("https://") || Path::new(first).exists() {
-        client.play_file_or_url(first)?;
+    let is_url = first.starts_with("http://") || first.starts_with("https://");
+    let expanded_path = lux_core::config::expand_path(first);
+    let is_path_like = first.starts_with('/')
+        || first.starts_with('~')
+        || first.contains('/')
+        || first.contains('\\')
+        || first.ends_with(".mp3")
+        || first.ends_with(".flac")
+        || first.ends_with(".m4a")
+        || first.ends_with(".ogg")
+        || first.ends_with(".wav");
 
-        let filename = Path::new(first)
+    if is_url || expanded_path.exists() {
+        let play_target = if is_url {
+            first.clone()
+        } else {
+            expanded_path.to_string_lossy().to_string()
+        };
+        client.play_file_or_url(&play_target)?;
+
+        let filename = Path::new(&play_target)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(first);
+            .unwrap_or(&play_target);
 
         let entry = SearchCacheEntry {
             cli_id: "direct".to_string(),
@@ -193,7 +210,7 @@ pub async fn run(
             pic_url: None,
             songmid: None,
             hash: None,
-            extra: Some(first.to_string()),
+            extra: Some(play_target.clone()),
         };
 
         save_currently_playing(&entry)?;
@@ -203,17 +220,19 @@ pub async fn run(
                 "{}",
                 serde_json::json!({
                     "status": "playing",
-                    "file": first
+                    "file": play_target
                 })
             );
         } else {
             println!(
                 "{} Playing direct link/file: {}",
                 "▶".green().bold(),
-                first.cyan()
+                play_target.cyan()
             );
         }
         return Ok(());
+    } else if is_path_like {
+        return Err(anyhow!("Local file not found: {}", first));
     }
 
     // Case D: Multiple or Single CLI IDs from Database

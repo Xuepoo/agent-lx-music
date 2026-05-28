@@ -26,6 +26,14 @@ impl SourceManager {
             .map(|c| c.source.js_priority)
             .unwrap_or(true);
 
+        lux_core::log_verbose!(
+            "Resolving URL for song_id: '{}', platform: '{}', quality: '{}', js_priority: {}",
+            song_id,
+            platform,
+            quality.as_str(),
+            js_priority
+        );
+
         let validate_url = |url: &str| -> bool {
             let url_trimmed = url.trim();
             if url_trimmed.is_empty() {
@@ -41,6 +49,11 @@ impl SourceManager {
         };
 
         let query_js = || -> Option<String> {
+            lux_core::log_verbose!(
+                "Attempting URL resolution via JS dynamic sources for song_id: '{}', platform: '{}'",
+                song_id,
+                platform
+            );
             let db_entries = crate::library::db::list_sources().unwrap_or_default();
             for entry in db_entries {
                 if !entry.enabled {
@@ -53,6 +66,11 @@ impl SourceManager {
                     continue;
                 }
 
+                lux_core::log_verbose!(
+                    "Executing JS resolver in '{}' (path: {})",
+                    entry.name,
+                    entry.script_path
+                );
                 let Ok(script) = std::fs::read_to_string(&entry.script_path) else {
                     continue;
                 };
@@ -64,38 +82,95 @@ impl SourceManager {
                         "hash": if platform == "kg" { Some(song_id) } else { None }
                     });
 
-                    if let Ok(url) = sandbox.execute_resolve(
+                    match sandbox.execute_resolve(
                         &script,
                         platform,
                         song_id,
                         quality.as_str(),
                         music_info,
                     ) {
-                        if validate_url(&url) {
-                            return Some(url);
+                        Ok(url) => {
+                            if validate_url(&url) {
+                                lux_core::log_verbose!(
+                                    "JS resolver in '{}' successfully resolved valid URL: {}",
+                                    entry.name,
+                                    url
+                                );
+                                return Some(url);
+                            } else {
+                                lux_core::log_verbose!(
+                                    "JS resolver in '{}' returned invalid/blocked URL: {}",
+                                    entry.name,
+                                    url
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            lux_core::log_verbose!(
+                                "JS resolver in '{}' execution failed: {:?}",
+                                entry.name,
+                                e
+                            );
                         }
                     }
                 }
             }
+            lux_core::log_verbose!(
+                "JS dynamic sources failed to resolve URL for song_id: '{}'",
+                song_id
+            );
             None
         };
 
         let query_native = || -> Option<String> {
+            lux_core::log_verbose!(
+                "Attempting URL resolution via Native sources for song_id: '{}', platform: '{}'",
+                song_id,
+                platform
+            );
             #[cfg(feature = "lux-native")]
             {
                 let src_enum = Source::from(platform);
                 if let Some(native_src) = lux_native::get_native_source(&src_enum) {
+                    lux_core::log_verbose!("Calling native get_url for platform '{}'", platform);
                     let result = tokio::task::block_in_place(|| {
                         let rt = tokio::runtime::Handle::current();
                         rt.block_on(async { native_src.get_url(song_id, quality).await })
                     });
-                    if let Ok(url) = result {
-                        if validate_url(&url) {
-                            return Some(url);
+                    match result {
+                        Ok(url) => {
+                            if validate_url(&url) {
+                                lux_core::log_verbose!(
+                                    "Native platform '{}' successfully resolved URL: {}",
+                                    platform,
+                                    url
+                                );
+                                return Some(url);
+                            } else {
+                                lux_core::log_verbose!(
+                                    "Native platform '{}' returned invalid URL: {}",
+                                    platform,
+                                    url
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            lux_core::log_verbose!(
+                                "Native platform '{}' failed to resolve URL: {:?}",
+                                platform,
+                                e
+                            );
                         }
                     }
+                } else {
+                    lux_core::log_verbose!(
+                        "No native source compiled/available for platform '{}'",
+                        platform
+                    );
                 }
             }
+            #[cfg(not(feature = "lux-native"))]
+            lux_core::log_verbose!("Native sources not compiled in this build");
             None
         };
 

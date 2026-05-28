@@ -149,11 +149,27 @@ pub async fn run(
             #[cfg(feature = "lux-native")]
             {
                 if let Some(native_src) = lux_native::get_native_source(&src) {
-                    return native_src
+                    lux_core::log_verbose!(
+                        "Querying native source '{}' for keyword '{}'",
+                        src.as_str(),
+                        platform_search_term_clone
+                    );
+                    let res = native_src
                         .search(&platform_search_term_clone, page, limit)
-                        .await
-                        .ok()
-                        .map(|r| r.list);
+                        .await;
+                    match &res {
+                        Ok(r) => lux_core::log_verbose!(
+                            "Native source '{}' search returned {} results",
+                            src.as_str(),
+                            r.list.len()
+                        ),
+                        Err(e) => lux_core::log_verbose!(
+                            "Native source '{}' search failed: {:?}",
+                            src.as_str(),
+                            e
+                        ),
+                    }
+                    return res.ok().map(|r| r.list);
                 }
             }
             None
@@ -173,6 +189,7 @@ pub async fn run(
             if supported_platforms.contains(platform) {
                 let platform_search_term_clone = platform_search_term.clone();
                 let platform_clone = platform.clone();
+                let entry_name = entry.name.clone();
                 let script_path = entry.script_path.clone();
                 let task = tokio::spawn(async move {
                     let Ok(script) = std::fs::read_to_string(&script_path) else {
@@ -181,13 +198,37 @@ pub async fn run(
                     let Ok(sandbox) = crate::source::runtime::JsSandbox::new() else {
                         return None;
                     };
-                    if let Ok(res_str) = sandbox.execute_search(
+                    lux_core::log_verbose!(
+                        "Querying JS source '{}' (path: {}) for platform '{}' and keyword '{}'",
+                        entry_name,
+                        script_path,
+                        platform_clone,
+                        platform_search_term_clone
+                    );
+                    let res_search = sandbox.execute_search(
                         &script,
                         &platform_clone,
                         &platform_search_term_clone,
                         page,
                         limit,
-                    ) {
+                    );
+                    match &res_search {
+                        Ok(_) => lux_core::log_verbose!(
+                            "JS source '{}' search executed successfully",
+                            entry_name
+                        ),
+                        Err(e) => lux_core::log_verbose!(
+                            "JS source '{}' search execution failed: {:?}",
+                            entry_name,
+                            e
+                        ),
+                    }
+                    if let Ok(res_str) = res_search {
+                        lux_core::log_verbose!(
+                            "JS search raw response for '{}': {}",
+                            entry_name,
+                            res_str
+                        );
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res_str) {
                             let mut list = Vec::new();
                             if let Some(arr) = val["list"].as_array() {
