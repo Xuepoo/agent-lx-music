@@ -23,6 +23,82 @@ struct SearchTableEntry {
     source: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SearchDirectives {
+    pub query: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub kbps: Option<String>,
+}
+
+pub fn parse_search_directives(keyword: &str) -> SearchDirectives {
+    let mut query_parts = Vec::new();
+    let mut artist = None;
+    let mut album = None;
+    let mut kbps = None;
+
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = ' ';
+
+    let chars: Vec<char> = keyword.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_quotes {
+            if c == quote_char {
+                in_quotes = false;
+                tokens.push(current.clone());
+                current.clear();
+            } else {
+                current.push(c);
+            }
+        } else {
+            if c == '"' || c == '\'' {
+                in_quotes = true;
+                quote_char = c;
+            } else if c.is_whitespace() {
+                if !current.is_empty() {
+                    tokens.push(current.clone());
+                    current.clear();
+                }
+            } else {
+                current.push(c);
+            }
+        }
+        i += 1;
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    for token in tokens {
+        let normalized = token.replace("：", ":");
+        if let Some(val) = normalized.strip_prefix("artist:") {
+            artist = Some(val.to_string());
+        } else if let Some(val) = normalized.strip_prefix("singer:") {
+            artist = Some(val.to_string());
+        } else if let Some(val) = normalized.strip_prefix("album:") {
+            album = Some(val.to_string());
+        } else if let Some(val) = normalized.strip_prefix("kbps:") {
+            kbps = Some(val.to_string());
+        } else if let Some(val) = normalized.strip_prefix("quality:") {
+            kbps = Some(val.to_string());
+        } else {
+            query_parts.push(token);
+        }
+    }
+
+    let query = query_parts.join(" ");
+    SearchDirectives {
+        query,
+        artist,
+        album,
+        kbps,
+    }
+}
+
 #[allow(
     clippy::collapsible_if,
     clippy::manual_map,
@@ -36,6 +112,19 @@ pub async fn run(
     id_only: bool,
     json: bool,
 ) -> Result<()> {
+    let directives = parse_search_directives(&keyword);
+    let mut search_terms = Vec::new();
+    if !directives.query.is_empty() {
+        search_terms.push(directives.query.clone());
+    }
+    if let Some(ref art) = directives.artist {
+        search_terms.push(art.clone());
+    }
+    let platform_search_term = if search_terms.is_empty() {
+        keyword.clone()
+    } else {
+        search_terms.join(" ")
+    };
     // 1. Determine which platforms to search
     let platforms = if source_str == "all" {
         vec![
@@ -54,14 +143,14 @@ pub async fn run(
     // A. Native search tasks
     for platform in &platforms {
         let src = Source::from(platform.clone());
-        let keyword_clone = keyword.clone();
+        let platform_search_term_clone = platform_search_term.clone();
         let task = tokio::spawn(async move {
-            let _ = (&src, &keyword_clone);
+            let _ = (&src, &platform_search_term_clone);
             #[cfg(feature = "lux-native")]
             {
                 if let Some(native_src) = lux_native::get_native_source(&src) {
                     return native_src
-                        .search(&keyword_clone, page, limit)
+                        .search(&platform_search_term_clone, page, limit)
                         .await
                         .ok()
                         .map(|r| r.list);
@@ -82,7 +171,7 @@ pub async fn run(
             serde_json::from_str(&entry.platforms).unwrap_or_default();
         for platform in &platforms {
             if supported_platforms.contains(platform) {
-                let keyword_clone = keyword.clone();
+                let platform_search_term_clone = platform_search_term.clone();
                 let platform_clone = platform.clone();
                 let script_path = entry.script_path.clone();
                 let task = tokio::spawn(async move {
@@ -95,7 +184,7 @@ pub async fn run(
                     if let Ok(res_str) = sandbox.execute_search(
                         &script,
                         &platform_clone,
-                        &keyword_clone,
+                        &platform_search_term_clone,
                         page,
                         limit,
                     ) {
@@ -150,7 +239,7 @@ pub async fn run(
                                         interval,
                                         pic_url,
                                         hash: item["hash"].as_str().map(|s| s.to_string()),
-                                        extra: None,
+                                        extra: Some(item.to_string()),
                                     });
                                 }
                             }
@@ -225,32 +314,42 @@ pub async fn run(
     let mut merged_list: Vec<MusicInfo> = dedup_map.into_values().collect();
 
     // 3. Dynamic Relevance Ranking
-    let compute_relevance_score = |song: &MusicInfo, keyword: &str| -> i32 {
+    let compute_relevance_score = |song: &MusicInfo, directives: &SearchDirectives| -> i32 {
         let name_lower = song.name.to_lowercase();
         let singer_lower = song.singer.to_lowercase();
-        let kw_lower = keyword.to_lowercase();
+        let kw_lower = if directives.query.is_empty() {
+            if let Some(ref art) = directives.artist {
+                art.to_lowercase()
+            } else {
+                "".to_string()
+            }
+        } else {
+            directives.query.to_lowercase()
+        };
 
         let mut score = 0i32;
 
-        // A. Title match
-        if name_lower == kw_lower {
-            score += 1000;
-        } else if name_lower.starts_with(&kw_lower) {
-            score += 500;
-        } else if name_lower.contains(&kw_lower) {
-            score += 200;
-        }
+        if !kw_lower.is_empty() {
+            // A. Title match
+            if name_lower == kw_lower {
+                score += 1000;
+            } else if name_lower.starts_with(&kw_lower) {
+                score += 500;
+            } else if name_lower.contains(&kw_lower) {
+                score += 200;
+            }
 
-        // B. Artist match
-        if singer_lower == kw_lower {
-            score += 600;
-        } else if singer_lower.contains(&kw_lower) {
-            score += 150;
-        }
+            // B. Artist match
+            if singer_lower == kw_lower {
+                score += 600;
+            } else if singer_lower.contains(&kw_lower) {
+                score += 150;
+            }
 
-        // C. Mixed title + artist match
-        if kw_lower.contains(&name_lower) && kw_lower.contains(&singer_lower) {
-            score += 800;
+            // C. Mixed title + artist match
+            if kw_lower.contains(&name_lower) && kw_lower.contains(&singer_lower) {
+                score += 800;
+            }
         }
 
         // D. Penalty filters (降权 DJ / Remix / Live / Cover)
@@ -288,12 +387,58 @@ pub async fn run(
             score += 50;
         }
 
+        // G. Advanced Search Directives Hard Filtering
+        if let Some(ref target_artist) = directives.artist {
+            let target_lower = target_artist.to_lowercase();
+            if !singer_lower.contains(&target_lower) {
+                score -= 20000;
+            }
+        }
+
+        if let Some(ref target_album) = directives.album {
+            if let Some(ref song_album) = song.album_name {
+                let song_album_lower = song_album.to_lowercase();
+                let target_lower = target_album.to_lowercase();
+                if !song_album_lower.contains(&target_lower) {
+                    score -= 20000;
+                }
+            } else {
+                score -= 20000;
+            }
+        }
+
+        if let Some(ref target_kbps) = directives.kbps {
+            let mut matched = false;
+            let mut has_extra_info = false;
+            if let Some(ref extra_str) = song.extra {
+                if let Ok(extra_val) = serde_json::from_str::<serde_json::Value>(extra_str) {
+                    if let Some(files) = extra_val["files"].as_object() {
+                        has_extra_info = true;
+                        let target_lower = target_kbps.to_lowercase();
+                        for k in files.keys() {
+                            let k_lower = k.to_lowercase();
+                            if k_lower.contains(&target_lower) || target_lower.contains(&k_lower) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if has_extra_info && !matched {
+                score -= 20000;
+            }
+        }
+
         score
     };
 
+    // 过滤掉所有不符合硬约束的歌曲（分数由于被惩罚而小于 -5000）
+    merged_list.retain(|song| compute_relevance_score(song, &directives) > -5000);
+
     merged_list.sort_by(|a, b| {
-        let score_a = compute_relevance_score(a, &keyword);
-        let score_b = compute_relevance_score(b, &keyword);
+        let score_a = compute_relevance_score(a, &directives);
+        let score_b = compute_relevance_score(b, &directives);
         score_b.cmp(&score_a) // Descending relevance
     });
 
@@ -377,4 +522,33 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_search_directives() {
+        let d = parse_search_directives("晴天 artist:周杰伦 album:叶惠美 kbps:320");
+        assert_eq!(d.query, "晴天");
+        assert_eq!(d.artist.as_deref(), Some("周杰伦"));
+        assert_eq!(d.album.as_deref(), Some("叶惠美"));
+        assert_eq!(d.kbps.as_deref(), Some("320"));
+
+        let d2 = parse_search_directives("晴天 artist:\"周 杰伦\"");
+        assert_eq!(d2.query, "晴天");
+        assert_eq!(d2.artist.as_deref(), Some("周 杰伦"));
+
+        let d3 = parse_search_directives("晴天");
+        assert_eq!(d3.query, "晴天");
+        assert_eq!(d3.artist, None);
+        assert_eq!(d3.album, None);
+        assert_eq!(d3.kbps, None);
+
+        let d4 = parse_search_directives("晴天 artist：周杰伦 album：叶惠美");
+        assert_eq!(d4.query, "晴天");
+        assert_eq!(d4.artist.as_deref(), Some("周杰伦"));
+        assert_eq!(d4.album.as_deref(), Some("叶惠美"));
+    }
 }
