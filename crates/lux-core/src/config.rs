@@ -281,14 +281,69 @@ impl Config {
     }
 
     pub fn get_resolved_download_dir(&self) -> PathBuf {
-        let path_str = &self.download.output_dir;
-        if let Some(stripped) = path_str.strip_prefix("~/")
-            && let Some(home) = dirs::home_dir()
-        {
-            return home.join(stripped);
-        }
-        PathBuf::from(path_str)
+        expand_path(&self.download.output_dir)
     }
+}
+
+pub fn expand_path(path_str: &str) -> PathBuf {
+    let mut resolved = path_str.to_string();
+
+    // 1. Handle tilde (~) expansion
+    if resolved.starts_with("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        resolved = resolved.replacen(
+            "~/",
+            &format!("{}/", home.to_string_lossy().trim_end_matches('/')),
+            1,
+        );
+    } else if resolved == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        resolved = home.to_string_lossy().to_string();
+    }
+
+    // 2. Expand environment variables ($VAR and ${VAR})
+    let mut final_path = String::new();
+    let chars: Vec<char> = resolved.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            if chars[i + 1] == '{' {
+                let mut j = i + 2;
+                let mut var_name = String::new();
+                while j < chars.len() && chars[j] != '}' {
+                    var_name.push(chars[j]);
+                    j += 1;
+                }
+                if j < chars.len() && chars[j] == '}' {
+                    if let Ok(val) = std::env::var(&var_name) {
+                        final_path.push_str(&val);
+                    }
+                    i = j + 1;
+                    continue;
+                }
+            } else {
+                let mut j = i + 1;
+                let mut var_name = String::new();
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    var_name.push(chars[j]);
+                    j += 1;
+                }
+                if !var_name.is_empty() {
+                    if let Ok(val) = std::env::var(&var_name) {
+                        final_path.push_str(&val);
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        final_path.push(chars[i]);
+        i += 1;
+    }
+
+    PathBuf::from(final_path)
 }
 
 fn get_default_config_toml() -> &'static str {
@@ -428,6 +483,37 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir_home);
         unsafe {
             env::remove_var("ALX_HOME");
+        }
+    }
+
+    #[test]
+    fn test_expand_path() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+
+        // Test tilde expansion
+        if let Some(home) = dirs::home_dir() {
+            let expanded = expand_path("~/Music/agent-lx-music");
+            assert_eq!(expanded, home.join("Music/agent-lx-music"));
+
+            let expanded_only_tilde = expand_path("~");
+            assert_eq!(expanded_only_tilde, home);
+        }
+
+        // Test environment variable expansion
+        unsafe {
+            env::set_var("TEST_DIR", "foo");
+            env::set_var("TEST_SUB", "bar");
+        }
+
+        let expanded_simple = expand_path("/tmp/$TEST_DIR/baz");
+        assert_eq!(expanded_simple, PathBuf::from("/tmp/foo/baz"));
+
+        let expanded_braces = expand_path("/tmp/${TEST_DIR}_test/$TEST_SUB");
+        assert_eq!(expanded_braces, PathBuf::from("/tmp/foo_test/bar"));
+
+        unsafe {
+            env::remove_var("TEST_DIR");
+            env::remove_var("TEST_SUB");
         }
     }
 }

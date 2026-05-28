@@ -37,6 +37,7 @@ pub enum Commands {
     },
 
     /// Search for music across sources
+    #[command(visible_alias = "sch")]
     Search {
         keyword: String,
         #[arg(short, long, default_value = "all", help = "Filter by source")]
@@ -119,12 +120,14 @@ pub enum Commands {
     },
 
     /// Manage background download tasks
+    #[command(visible_alias = "dl")]
     Download {
         #[command(subcommand)]
         action: DownloadAction,
     },
 
     /// Manage custom playlists
+    #[command(visible_alias = "pl")]
     Playlist {
         #[command(subcommand)]
         action: PlaylistAction,
@@ -158,7 +161,7 @@ pub enum Commands {
     },
 
     /// Show or save lyrics for a song
-    #[command(visible_alias = "lrc")]
+    #[command(visible_alias = "lrc", visible_alias = "lyr", visible_alias = "lyrics")]
     Lyric {
         #[arg(
             help = "CLI ID or platform song ID of the song (defaults to currently playing song)"
@@ -183,6 +186,13 @@ pub enum Commands {
         save: bool,
         #[arg(short, long, help = "Custom output directory or target path")]
         output: Option<String>,
+    },
+
+    /// Generate shell autocompletion scripts
+    Completions {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 

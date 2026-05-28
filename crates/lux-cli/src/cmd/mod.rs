@@ -279,6 +279,11 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         Commands::Pic { id, save, output } => {
             pic::run(id, save, output, json).await?;
         }
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = crate::cli::Cli::command();
+            clap_complete::generate(shell, &mut cmd, "alx", &mut std::io::stdout());
+        }
     }
     Ok(())
 }

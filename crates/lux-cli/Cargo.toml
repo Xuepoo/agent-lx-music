@@ -27,6 +27,7 @@ lux-core = { path = "../lux-core", version = "0.1.1" }
 lux-native = { path = "../lux-native", version = "0.1.1", optional = true }
 
 clap = { workspace = true }
+clap_complete = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
