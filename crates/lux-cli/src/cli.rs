@@ -311,6 +311,13 @@ pub enum PlaylistAction {
     },
     /// Delete an existing playlist
     Delete { name: String },
+    /// Rename an existing playlist
+    Rename {
+        #[arg(required = true, help = "Current name of the playlist")]
+        old_name: String,
+        #[arg(required = true, help = "New name for the playlist")]
+        new_name: String,
+    },
     /// Add song(s) to a playlist by CLI ID
     Add {
         playlist: String,

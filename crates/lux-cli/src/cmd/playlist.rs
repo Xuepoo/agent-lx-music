@@ -80,6 +80,25 @@ pub async fn run(action: PlaylistAction, json: bool) -> Result<()> {
                 println!("✓ Playlist \"{}\" deleted.", name.red().bold());
             }
         }
+        PlaylistAction::Rename { old_name, new_name } => {
+            db::rename_playlist(&old_name, &new_name)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "renamed",
+                        "old_name": old_name,
+                        "new_name": new_name
+                    })
+                );
+            } else {
+                println!(
+                    "✓ Playlist \"{}\" renamed to \"{}\".",
+                    old_name.yellow().bold(),
+                    new_name.green().bold()
+                );
+            }
+        }
         PlaylistAction::Add { playlist, ids } => {
             db::init_db()?;
             let mut added_songs = Vec::new();
