@@ -95,7 +95,7 @@ impl MusicSource for KuwoSource {
                     album_name,
                     album_id,
                     interval: Some(interval),
-                    pic_url: None,
+                    pic_url: item["WEBPIC"].as_str().map(|s| s.to_string()),
                     hash: None,
                     extra: None,
                 });

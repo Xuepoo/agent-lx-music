@@ -418,6 +418,18 @@ impl MpvClient {
         Ok(idx)
     }
 
+    pub fn next(&self) -> Result<()> {
+        self.ensure_running()?;
+        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")])?;
+        Ok(())
+    }
+
+    pub fn prev(&self) -> Result<()> {
+        self.ensure_running()?;
+        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")])?;
+        Ok(())
+    }
+
     pub fn quit(&self) -> Result<()> {
         if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
             let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("quit")]);

@@ -22,58 +22,96 @@ impl SourceManager {
     }
 
     pub fn resolve_url(&self, platform: &str, song_id: &str, quality: Quality) -> Result<String> {
-        // 1. Fetch installed JS sources from local database
-        let db_entries = crate::library::db::list_sources().unwrap_or_default();
+        let js_priority = lux_core::config::Config::load()
+            .map(|c| c.source.js_priority)
+            .unwrap_or(true);
 
-        // 2. Query enabled JS sources in order
-        for entry in db_entries {
-            if !entry.enabled {
-                continue;
+        let validate_url = |url: &str| -> bool {
+            let url_trimmed = url.trim();
+            if url_trimmed.is_empty() {
+                return false;
             }
-
-            // Quick static check if the platform is supported by this JS script
-            let platforms: Vec<String> = serde_json::from_str(&entry.platforms).unwrap_or_default();
-            if !platforms.contains(&platform.to_string()) {
-                continue;
+            if !url_trimmed.starts_with("http://") && !url_trimmed.starts_with("https://") {
+                return false;
             }
+            if url_trimmed.contains("horse.mp3") || url_trimmed.contains("example.com") {
+                return false;
+            }
+            true
+        };
 
-            // Load and execute in sandbox
-            let Ok(script) = std::fs::read_to_string(&entry.script_path) else {
-                continue;
-            };
-            if let Ok(sandbox) = runtime::JsSandbox::new() {
-                // Populate basic song info
-                let music_info = serde_json::json!({
-                    "songmid": song_id,
-                    "name": "unknown",
-                    "singer": "unknown",
-                    "hash": if platform == "kg" { Some(song_id) } else { None }
-                });
+        let query_js = || -> Option<String> {
+            let db_entries = crate::library::db::list_sources().unwrap_or_default();
+            for entry in db_entries {
+                if !entry.enabled {
+                    continue;
+                }
 
-                if let Ok(url) = sandbox.execute_resolve(
-                    &script,
-                    platform,
-                    song_id,
-                    quality.as_str(),
-                    music_info,
-                ) {
-                    return Ok(url);
+                let platforms: Vec<String> =
+                    serde_json::from_str(&entry.platforms).unwrap_or_default();
+                if !platforms.contains(&platform.to_string()) {
+                    continue;
+                }
+
+                let Ok(script) = std::fs::read_to_string(&entry.script_path) else {
+                    continue;
+                };
+                if let Ok(sandbox) = runtime::JsSandbox::new() {
+                    let music_info = serde_json::json!({
+                        "songmid": song_id,
+                        "name": "unknown",
+                        "singer": "unknown",
+                        "hash": if platform == "kg" { Some(song_id) } else { None }
+                    });
+
+                    if let Ok(url) = sandbox.execute_resolve(
+                        &script,
+                        platform,
+                        song_id,
+                        quality.as_str(),
+                        music_info,
+                    ) {
+                        if validate_url(&url) {
+                            return Some(url);
+                        }
+                    }
                 }
             }
-        }
+            None
+        };
 
-        // 3. Fallback to native Rust parsers if compiled in
-        #[cfg(feature = "lux-native")]
-        {
-            let src_enum = Source::from(platform);
-            if let Some(native_src) = lux_native::get_native_source(&src_enum) {
-                let result = tokio::task::block_in_place(|| {
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async { native_src.get_url(song_id, quality).await })
-                });
-                if let Ok(url) = result {
-                    return Ok(url);
+        let query_native = || -> Option<String> {
+            #[cfg(feature = "lux-native")]
+            {
+                let src_enum = Source::from(platform);
+                if let Some(native_src) = lux_native::get_native_source(&src_enum) {
+                    let result = tokio::task::block_in_place(|| {
+                        let rt = tokio::runtime::Handle::current();
+                        rt.block_on(async { native_src.get_url(song_id, quality).await })
+                    });
+                    if let Ok(url) = result {
+                        if validate_url(&url) {
+                            return Some(url);
+                        }
+                    }
                 }
+            }
+            None
+        };
+
+        if js_priority {
+            if let Some(url) = query_js() {
+                return Ok(url);
+            }
+            if let Some(url) = query_native() {
+                return Ok(url);
+            }
+        } else {
+            if let Some(url) = query_native() {
+                return Ok(url);
+            }
+            if let Some(url) = query_js() {
+                return Ok(url);
             }
         }
 

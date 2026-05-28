@@ -252,6 +252,55 @@ pub fn list_sources() -> Result<Vec<SourceDbEntry>> {
     Ok(result)
 }
 
+pub fn delete_source(id: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    conn.execute("DELETE FROM sources WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn update_source_script(id: &str, content_hash: &str, updated_at: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    conn.execute(
+        "UPDATE sources SET content_hash = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, content_hash, updated_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_source(id: &str) -> Result<Option<SourceDbEntry>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, version, author, homepage, repository,
+                script_path, source_url, content_hash, platforms, qualities,
+                enabled, created_at, updated_at FROM sources WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        let enabled_val: i32 = row.get(11)?;
+        Ok(SourceDbEntry {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            version: row.get(2)?,
+            author: row.get(3)?,
+            homepage: row.get(4)?,
+            repository: row.get(5)?,
+            script_path: row.get(6)?,
+            source_url: row.get(7)?,
+            content_hash: row.get(8)?,
+            platforms: row.get(9)?,
+            qualities: row.get(10)?,
+            enabled: enabled_val != 0,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
+        })
+    })?;
+
+    if let Some(row) = rows.next() {
+        Ok(Some(row?))
+    } else {
+        Ok(None)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadEntry {
     pub id: i64,

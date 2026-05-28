@@ -51,7 +51,10 @@ pub enum Commands {
 
     /// Play a song, URL, or local file
     Play {
-        #[arg(required = true, help = "Song IDs, URLs or local file paths")]
+        #[arg(
+            required_unless_present = "from_playlist",
+            help = "Song IDs, URLs or local file paths"
+        )]
         id_or_url: Vec<String>,
         #[arg(short, long, help = "Override audio quality")]
         quality: Option<String>,
@@ -60,6 +63,12 @@ pub enum Commands {
         #[arg(long, help = "Shuffle multiple songs when loading")]
         shuffle: bool,
     },
+
+    /// Skip to the next song in the queue
+    Next,
+
+    /// Skip to the previous song in the queue
+    Prev,
 
     /// Show current playback status
     Now,
@@ -96,6 +105,9 @@ pub enum Commands {
         #[arg(help = "Shuffle mode (on, off)")]
         mode: Option<String>,
     },
+
+    /// Show global player playback state
+    State,
 
     /// Stop mpv and exit daemon
     Quit,
@@ -323,6 +335,26 @@ pub enum SourceAction {
     Add { path_or_url: String },
     /// List all installed JS sources
     List,
+    /// Remove an installed JS source
+    Remove { id: String },
+    /// Update installed JS sources from their remote URLs
+    Update {
+        /// Source ID to update
+        id: Option<String>,
+        /// Check and update all sources
+        #[arg(long)]
+        all: bool,
+    },
+    /// Test if a source is functional (Search + URL resolution health checks)
+    Test {
+        id: String,
+        #[arg(long, default_value = "周杰伦")]
+        keyword: String,
+        #[arg(long)]
+        platform: Option<String>,
+    },
+    /// Show detailed info about an installed source
+    Info { id: String },
 }
 
 #[derive(Subcommand, Debug, Clone)]
