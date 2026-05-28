@@ -492,17 +492,17 @@ pub async fn run(
             .enumerate()
             .map(|(i, entry)| SearchTableEntry {
                 index: i + 1,
-                id: entry.cli_id.cyan().to_string(),
+                id: entry.cli_id.clone(),
                 title: entry.name,
                 singer: entry.singer,
                 album: entry.album_name.unwrap_or_else(|| "N/A".to_string()),
                 duration: entry.interval.unwrap_or_else(|| "00:00".to_string()),
                 source: match entry.source.as_str() {
-                    "wy" => "NetEase".red().bold().to_string(),
-                    "kw" => "Kuwo".blue().bold().to_string(),
-                    "kg" => "Kugou".green().bold().to_string(),
-                    "tx" => "QQ".yellow().bold().to_string(),
-                    "mg" => "Migu".magenta().bold().to_string(),
+                    "wy" => "NetEase".to_string(),
+                    "kw" => "Kuwo".to_string(),
+                    "kg" => "Kugou".to_string(),
+                    "tx" => "QQ".to_string(),
+                    "mg" => "Migu".to_string(),
                     other => other.to_string(),
                 },
             })
