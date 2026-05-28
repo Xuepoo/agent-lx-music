@@ -1,7 +1,7 @@
 ---
 name: agent-lx-music
 description: "Control agent-lx-music (alx) CLI to search, play, download music, fetch lyrics/covers, and manage playlists."
-version: 1.0.0
+version: 2.0.0
 author: agent-lx-music project
 license: MIT
 metadata:
@@ -14,136 +14,162 @@ metadata:
 
 ## Overview
 
-`alx` is the high-performance music CLI engine for `agent-lx-music`. It is completely terminal-native and operates on a decoupled architecture using `mpv` inside a POSIX detached daemon. Agents use `alx` to automate search queries, control media states via IPC sockets, execute high-speed parallel downloads, cache lyrics, and extract album cover art.
+`alx` is a terminal-native music CLI that replaces lx-music-desktop. It uses mpv as a detached daemon for playback, supports JS source scripts for URL resolution, and has native search for multiple music platforms.
 
-All commands support `--json` output, allowing seamless piping and structured automation.
-
----
+All commands support `--json` output and `--quiet` to suppress non-data output.
 
 ## Quick Command Reference
 
+### Search
 ```bash
-# 1. Global Custom Configuration (Dynamically Propagated)
-alx --config <toml_path> <COMMAND>      # Override config path globally for this run
-
-# 2. Search Music
-alx search "周杰伦 晴天"                 # Search across all enabled platforms
-alx search "晴天" --source wy            # Search NetEase Music ('wy') only
-alx search "晴天" --id-only              # Output only dynamic short hashes (ideal for xargs)
-alx search "晴天" --json                 # Structured JSON output
-
-# 3. Media Playback Control
-alx play <cli_id_or_url>                 # Play a cached song ID, direct URL, or local file
-alx play <id> --quality flac             # Request specific audio resolution quality
-alx now                                  # Renders active progress bar, volume, and metadata
-alx pause                                # Pause playback
-alx resume                               # Resume playback
-alx stop                                 # Stop audio stream
-alx volume +10 / alx volume -10          # Adjust volume relatively (0-100)
-alx seek +30 / alx seek 2:30             # Seek relatively or absolutely
-alx repeat off|one|all                   # Cycle through repeat states
-alx shuffle on|off                       # Toggle shuffle status
-alx quit                                 # Terminate background mpv daemon cleanly
-
-# 4. Playlist & Favorites
-alx fav add                              # Register active song to Favorites playlist
-alx fav list                             # Output tabular or JSON favorites list
-alx fav play --shuffle                   # Play loaded favorites shuffled
-alx playlist create "Coding"             # Create custom playlist
-alx playlist add "Coding" <cli_id>       # Add track to playlist
-
-# 5. Parallel Downloading
-alx download <cli_id>                    # High-speed download with ID3 tags embedding
-alx download <cli_id> -o /path/to/dir    # Output to custom directory
-
-# 6. Static LRC Lyrics & Cover Art (Phase 6 Specs)
-alx lyric <cli_id>                       # Print main lyrics instantly (SQLite-cached)
-alx lyric <cli_id> --translated          # Print translated lyrics
-alx lyric <cli_id> --romanized           # Print romanized phonetic lyrics
-alx lyric <cli_id> --save                # Auto-save track as .lrc file in download folder
-alx pic <cli_id>                         # Output direct URL of album cover art
-alx pic <cli_id> --save                  # Download cover using User-Agent with Magic Bytes Detection
-alx pic <cli_id> --save -o <path>        # Download cover to custom directory/file path
+alx search "keyword"                   # Search all platforms
+alx search "keyword" --source kw       # Search specific platform (kw/wy/kg)
+alx search "keyword" --limit 10        # Limit results
+alx search "keyword" --id-only         # Output only CLI IDs (for piping)
+alx search "keyword" --json            # JSON output
 ```
 
----
-
-## High-Performance Automation Patterns
-
-### Pattern 1: Intelligent Search → Play Match
-Query search results, extract the primary item's CLI ID using `jq`, and initialize playback:
+### Playback
 ```bash
-# Search and play the top NetEase match
-CLI_ID=$(alx search "周杰伦 晴天" --source wy --json | jq -r '.list[0].id')
-alx play "$CLI_ID"
+alx play <cli_id>                      # Play by search result ID
+alx play <cli_id> --quality flac24bit  # Play with specific quality
+alx play <url>                         # Play direct URL
+alx play /path/to/file.mp3            # Play local file
+alx play --from-playlist "name"       # Play entire playlist
+alx play --from-playlist "name" --shuffle  # Shuffle playlist
+alx next / alx prev                   # Skip tracks
+alx pause / alx resume / alx stop     # Playback control
+alx seek +30 / alx seek 2:30 / alx seek 50%  # Seek
+alx volume 80 / alx volume +10        # Volume (0-100)
+alx repeat off|one|all                # Repeat mode
+alx shuffle on|off                    # Shuffle mode
+alx now                               # Current playback status
+alx state                             # Full player state (JSON-friendly)
+alx quit                              # Kill mpv daemon
 ```
 
-### Pattern 2: Bulk Playlist Caching & Downloading
-Retrieve all tracks in a user list and download them concurrently in flac resolution:
+### Download
 ```bash
-alx playlist export "Favorites" --json | jq -r '.list[].id' | xargs -P 4 -I {} alx download {} --quality flac
+alx download add <id>                          # Download single song
+alx download add <id1> <id2> <id3>             # Download multiple songs
+alx download add <id> --quality flac24bit      # Specific quality
+alx download add --file playlist.m3u           # Batch from M3U/CSV/JSON
+alx download status                            # Active downloads
+alx download list                              # Download history
+alx download retry <task_id>                   # Retry failed download
 ```
 
-### Pattern 3: Auto-Export Lyrics to LRC files
-Grab the currently playing song's metadata, download its main/translated lyrics, and output them to download folders:
+### Playlists
 ```bash
-# Save main and translated lyrics for current song
-alx lyric --save
-alx lyric --translated --save
+alx playlist list                      # List all playlists
+alx playlist create "name"            # Create playlist
+alx playlist delete "name"            # Delete playlist
+alx playlist rename "old" "new"       # Rename playlist
+alx playlist add "name" <id>          # Add song(s)
+alx playlist remove "name" <id>       # Remove song
+alx playlist show "name"              # Show playlist contents
+alx playlist play "name"              # Play playlist
+alx playlist play "name" --shuffle    # Shuffle play
+alx playlist export "name" --format m3u   # Export (m3u/json/csv)
+alx playlist import file.m3u --name "name"  # Import
 ```
 
----
+### Favorites
+```bash
+alx fav list                          # List favorites
+alx fav add                           # Add current song
+alx fav add <id>                      # Add specific song
+alx fav remove <id>                   # Remove from favorites
+alx fav play                          # Play all favorites
+```
 
-## Output Protocols (For JSON Piping)
+### Lyrics & Cover
+```bash
+alx lyric                             # Lyrics for current song
+alx lyric <id>                        # Lyrics for specific song
+alx lyric <id> --translated           # Translated lyrics
+alx lyric <id> --romanized            # Romanized lyrics
+alx lyric <id> --save                 # Save as .lrc file
+alx pic <id>                          # Cover art URL
+alx pic <id> --save                   # Download cover art
+```
 
-### JSON search result output (`alx search <query> --json`)
+### Source Management
+```bash
+alx source list                       # List installed sources
+alx source add <path_or_url>          # Add source script
+alx source remove <id>                # Remove source
+alx source update <id>                # Update from remote URL
+alx source test <id>                  # Health check (init/search/url)
+alx source info <id>                  # Detailed source info
+```
+
+### Board & Discover
+```bash
+alx board                             # List available charts
+alx board --source wy --id wy-hot    # Songs in a chart
+alx board --source wy --id wy-hot --play  # Play chart
+alx discover                          # Recommended playlists
+alx discover --source kw --tag 华语   # Filter by tag
+alx discover show <playlist-id>       # List songs
+alx discover play <playlist-id>       # Play recommended playlist
+```
+
+### Queue
+```bash
+alx queue show                        # Show current queue
+alx queue add <id>                    # Add to queue
+alx queue insert <id>                 # Insert after current
+alx queue remove <position>           # Remove by position
+alx queue move <from> <to>            # Reorder
+alx queue clear                       # Clear queue
+```
+
+### Local Library
+```bash
+alx local scan                        # Scan download dir (or beets)
+alx local list                        # List indexed files
+alx local play <index>                # Play local file
+```
+
+### Config
+```bash
+alx config                            # Show all config
+alx config get <key>                  # Get value
+alx config set <key> <value>          # Set value
+alx config path                       # Config file path
+```
+
+## JSON Output
+
+All commands support `--json` for structured output. Example search result:
+
 ```json
-{
-  "list": [
-    {
-      "id": "c1a2",
-      "name": "晴天",
-      "singer": "周杰伦",
-      "source": "kw",
-      "interval": "04:29",
-      "album_name": "叶惠美",
-      "pic_url": "http://img.music.com/cover.png"
-    }
-  ],
-  "total": 42,
-  "page": 1
-}
+[
+  {
+    "cli_id": "04164d6d",
+    "song_id": "228908",
+    "name": "晴天",
+    "singer": "周杰伦",
+    "source": "kw",
+    "interval": "04:29",
+    "album_name": "叶惠美",
+    "pic_url": "https://img3.kuwo.cn/..."
+  }
+]
 ```
 
-### JSON lyrics output (`alx lyric <id> --json`)
-```json
-{
-  "song_id": "04164d6d",
-  "cli_id": "c1a2",
-  "name": "晴天",
-  "singer": "周杰伦",
-  "track": "main",
-  "lyric": "[00:00.00]晴天 - 周杰伦\n[00:29.00]故事的小黄花\n..."
-}
-```
+## Aliases
 
-### JSON cover art output (`alx pic <id> --json`)
-```json
-{
-  "song_id": "04164d6d",
-  "cli_id": "c1a2",
-  "name": "晴天",
-  "singer": "周杰伦",
-  "pic_url": "http://img.music.com/cover.png"
-}
-```
+- `sch` = `search`
+- `dl` = `download`
+- `pl` = `playlist`
+- `q` = `queue`
+- `lrc` / `lyr` / `lyrics` = `lyric`
+- `cover` = `pic`
+- `hot` = `board`
+- `explore` = `discover`
 
----
+## Verbose Mode
 
-## XDG Paths & Environment Variables
-
-To write config, state, or cache scripts under compliance:
-- **`ALX_HOME`**: Global override for all configuration/cache directories.
-- **`ALX_CONFIG`**: Directly links config file (default: `~/.config/agent-lx-music/config.toml`).
-- **`ALX_DATA`**: Data directory (default: `~/.local/share/agent-lx-music/`). Contains SQLite database `agent-lx-music.db`.
-- **`ALX_CACHE`**: Cache directory (default: `~/.cache/agent-lx-music/`). Contains daemon IPC socket `mpv.sock` and state `current.json`.
+Use `--verbose` or `-v` for debug output showing which sources are queried, HTTP requests, and JS sandbox execution details.
