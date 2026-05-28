@@ -316,6 +316,9 @@ async fn run_daemon() -> Result<()> {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.download.timeout))
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
         .build()?;
     let source_manager = Arc::new(SourceManager::new());
 

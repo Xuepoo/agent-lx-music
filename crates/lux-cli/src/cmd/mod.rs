@@ -1,4 +1,6 @@
+pub mod board;
 pub mod config;
+pub mod discover;
 pub mod download;
 pub mod fav;
 pub mod history;
@@ -283,6 +285,16 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             use clap::CommandFactory;
             let mut cmd = crate::cli::Cli::command();
             clap_complete::generate(shell, &mut cmd, "alx", &mut std::io::stdout());
+        }
+        Commands::Board { source, id, play } => {
+            board::run_board(source, id, play, json).await?;
+        }
+        Commands::Discover {
+            source,
+            tag,
+            action,
+        } => {
+            discover::run_discover(source, tag, action, json).await?;
         }
     }
     Ok(())

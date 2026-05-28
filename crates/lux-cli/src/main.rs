@@ -19,6 +19,12 @@ async fn main() {
         }
     }
 
+    if args.verbose {
+        unsafe {
+            std::env::set_var("ALX_VERBOSE", "1");
+        }
+    }
+
     // Setup color override
     let no_color = args.no_color || std::env::var("NO_COLOR").is_ok();
     if no_color {

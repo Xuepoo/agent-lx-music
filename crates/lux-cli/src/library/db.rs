@@ -798,7 +798,10 @@ pub fn list_playlists() -> Result<Vec<(String, Option<String>, i32)>> {
 
 pub fn delete_playlist(name: &str) -> Result<()> {
     let conn = get_db_conn()?;
-    conn.execute("DELETE FROM playlists WHERE name = ?1", params![name])?;
+    let rows = conn.execute("DELETE FROM playlists WHERE name = ?1", params![name])?;
+    if rows == 0 {
+        return Err(anyhow::anyhow!("Playlist '{}' not found", name));
+    }
     Ok(())
 }
 
@@ -809,6 +812,19 @@ pub fn add_to_playlist(playlist_name: &str, entry: &SearchCacheEntry) -> Result<
         params![playlist_name],
         |row| row.get(0),
     )?;
+
+    let exists: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = ?1 AND song_id = ?2 AND source = ?3",
+        params![playlist_id, entry.song_id, entry.source],
+        |row| row.get(0),
+    )?;
+    if exists > 0 {
+        return Err(anyhow::anyhow!(
+            "Song '{}' already exists in playlist '{}'",
+            entry.name,
+            playlist_name
+        ));
+    }
 
     let now = chrono::Local::now().to_rfc3339();
     let max_pos: Option<i32> = conn

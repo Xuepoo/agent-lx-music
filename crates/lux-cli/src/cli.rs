@@ -194,6 +194,28 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+
+    /// Browse native leaderboards and hot charts
+    #[command(visible_alias = "hot")]
+    Board {
+        #[arg(short, long, help = "Leaderboard platform source (e.g. wy, kw)")]
+        source: Option<String>,
+        #[arg(short, long, help = "Specific chart ID to retrieve tracks")]
+        id: Option<String>,
+        #[arg(long, help = "Play the chart directly")]
+        play: bool,
+    },
+
+    /// Discover curated playlists and recommendations
+    #[command(visible_alias = "explore")]
+    Discover {
+        #[arg(short, long, help = "Recommended platform source (e.g. wy)")]
+        source: Option<String>,
+        #[arg(short, long, help = "Tag to filter recommendations (e.g. 华语)")]
+        tag: Option<String>,
+        #[command(subcommand)]
+        action: Option<DiscoverAction>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -289,8 +311,12 @@ pub enum PlaylistAction {
     },
     /// Delete an existing playlist
     Delete { name: String },
-    /// Add a song to a playlist by CLI ID
-    Add { playlist: String, id: String },
+    /// Add song(s) to a playlist by CLI ID
+    Add {
+        playlist: String,
+        #[arg(required = true, help = "CLI ID(s) of the song(s)")]
+        ids: Vec<String>,
+    },
     /// Remove a song from a playlist by CLI ID
     Remove { playlist: String, id: String },
     /// Show all songs in a playlist
@@ -377,4 +403,18 @@ pub enum ConfigAction {
     Set { key: String, value: String },
     /// Show config file path
     Path,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DiscoverAction {
+    /// List songs in a recommended playlist
+    Show {
+        #[arg(required = true, help = "Curated playlist ID")]
+        playlist_id: String,
+    },
+    /// Play a recommended playlist
+    Play {
+        #[arg(required = true, help = "Curated playlist ID")]
+        playlist_id: String,
+    },
 }
