@@ -11,6 +11,7 @@ pub mod playlist;
 pub mod queue;
 pub mod search;
 pub mod source;
+pub mod state;
 
 use crate::cli::Commands;
 use anyhow::{Result, anyhow};
@@ -37,6 +38,30 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             shuffle,
         } => {
             play::run(id_or_url, quality, from_playlist, shuffle, json).await?;
+        }
+        Commands::Next => {
+            let client = crate::player::MpvClient::new();
+            client.next()?;
+            if !json {
+                println!("{} Skipped to the next song.", "⏭".green().bold());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "skipped", "direction": "next" })
+                );
+            }
+        }
+        Commands::Prev => {
+            let client = crate::player::MpvClient::new();
+            client.prev()?;
+            if !json {
+                println!("{} Skipped to the previous song.", "⏮".green().bold());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "skipped", "direction": "prev" })
+                );
+            }
         }
         Commands::Now => {
             now::run(json)?;
@@ -121,10 +146,40 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
                     println!("{}", serde_json::json!({ "repeat": m }));
                 }
             } else {
-                if !json {
-                    println!("Repeat mode configured successfully.");
+                let loop_file = crate::player::ipc::send_mpv_command(
+                    &client.socket_path,
+                    vec![
+                        serde_json::json!("get_property"),
+                        serde_json::json!("loop-file"),
+                    ],
+                )
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "no".to_string());
+
+                let loop_playlist = crate::player::ipc::send_mpv_command(
+                    &client.socket_path,
+                    vec![
+                        serde_json::json!("get_property"),
+                        serde_json::json!("loop-playlist"),
+                    ],
+                )
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "no".to_string());
+
+                let repeat_mode = if loop_file == "inf" || loop_file == "yes" {
+                    "one"
+                } else if loop_playlist == "inf" || loop_playlist == "yes" {
+                    "all"
                 } else {
-                    println!("{}", serde_json::json!({ "status": "ok" }));
+                    "off"
+                };
+
+                if !json {
+                    println!("Repeat mode: {}.", repeat_mode);
+                } else {
+                    println!("{}", serde_json::json!({ "repeat": repeat_mode }));
                 }
             }
         }
@@ -133,12 +188,25 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             if let Some(m) = mode {
                 if m == "on" {
                     client.set_repeat("off")?;
+                    // In mpv, enabling shuffle shuffles playlist
+                    let _ = crate::player::ipc::send_mpv_command(
+                        &client.socket_path,
+                        vec![serde_json::json!("playlist-shuffle")],
+                    );
                     if !json {
                         println!("Shuffle mode enabled.");
                     } else {
                         println!("{}", serde_json::json!({ "shuffle": "on" }));
                     }
                 } else {
+                    let _ = crate::player::ipc::send_mpv_command(
+                        &client.socket_path,
+                        vec![
+                            serde_json::json!("set_property"),
+                            serde_json::json!("shuffle"),
+                            serde_json::json!(false),
+                        ],
+                    );
                     if !json {
                         println!("Shuffle mode disabled.");
                     } else {
@@ -146,12 +214,29 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
                     }
                 }
             } else {
+                let shuffle_prop = crate::player::ipc::send_mpv_command(
+                    &client.socket_path,
+                    vec![
+                        serde_json::json!("get_property"),
+                        serde_json::json!("shuffle"),
+                    ],
+                )
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
                 if !json {
-                    println!("Shuffle mode configured successfully.");
+                    println!("Shuffle: {}.", if shuffle_prop { "on" } else { "off" });
                 } else {
-                    println!("{}", serde_json::json!({ "status": "ok" }));
+                    println!(
+                        "{}",
+                        serde_json::json!({ "shuffle": if shuffle_prop { "on" } else { "off" } })
+                    );
                 }
             }
+        }
+        Commands::State => {
+            state::run(json)?;
         }
         Commands::Quit => {
             let client = crate::player::MpvClient::new();

@@ -9,15 +9,109 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use rand::seq::SliceRandom;
+
 pub async fn run(
     id_or_urls: Vec<String>,
     quality_str: Option<String>,
-    _from_playlist: Option<String>,
-    _shuffle: bool,
+    from_playlist: Option<String>,
+    shuffle: bool,
     json: bool,
 ) -> Result<()> {
+    let config = lux_core::config::Config::load().unwrap_or_default();
+    let client = MpvClient::new();
+    let mgr = SourceManager::new();
+
+    // Determine quality
+    let quality = if let Some(ref q) = quality_str {
+        q.parse::<Quality>()
+            .map_err(|e| anyhow!("Invalid quality override: {}", e))?
+    } else {
+        config.source.default_quality
+    };
+
+    // Case A: Play from playlist
+    if let Some(ref playlist_name) = from_playlist {
+        crate::library::db::init_db()?;
+        let mut songs = crate::library::db::get_playlist_songs(playlist_name)?;
+        if songs.is_empty() {
+            return Err(anyhow!(
+                "Playlist '{}' is empty or does not exist",
+                playlist_name
+            ));
+        }
+
+        if shuffle {
+            let mut rng = rand::thread_rng();
+            songs.shuffle(&mut rng);
+        }
+
+        if !json {
+            println!(
+                "{} Loading playlist '{}' ({} songs)...",
+                "⚡".yellow().bold(),
+                playlist_name.cyan(),
+                songs.len()
+            );
+        }
+
+        // Clear playlist
+        let _ = crate::player::ipc::send_mpv_command(
+            &client.socket_path,
+            vec![serde_json::json!("playlist-clear")],
+        );
+
+        let first_song = &songs[0];
+        if !json {
+            println!(
+                "{} Resolving playable URL for '{}'...",
+                "⚡".yellow().bold(),
+                first_song.name.cyan()
+            );
+        }
+        let first_url = mgr.resolve_url(&first_song.source, &first_song.song_id, quality)?;
+        client.play_file_or_url(&first_url)?;
+        save_currently_playing(first_song)?;
+        let _ = add_to_history(first_song, None);
+
+        let mut added_songs = vec![first_song.clone()];
+
+        for song in songs.iter().skip(1) {
+            if let Ok(url) = mgr.resolve_url(&song.source, &song.song_id, quality) {
+                client.append_file_or_url(&url)?;
+                added_songs.push(song.clone());
+            }
+        }
+
+        let updated_queue = crate::cmd::queue::PlayQueue {
+            songs: added_songs,
+            current_index: Some(0),
+        };
+        crate::cmd::queue::save_queue(&updated_queue)?;
+
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "playing_playlist",
+                    "playlist": playlist_name,
+                    "count": updated_queue.songs.len(),
+                    "current": first_song.name
+                })
+            );
+        } else {
+            println!(
+                "{} Started playing playlist: {} (loaded {} songs)",
+                "▶".green().bold(),
+                playlist_name.cyan(),
+                updated_queue.songs.len()
+            );
+        }
+        return Ok(());
+    }
+
+    // Case B: No songs provided, try to resume
     if id_or_urls.is_empty() {
-        let config = lux_core::config::Config::load().unwrap_or_default();
         if config.player.auto_resume {
             let paths = lux_core::config::resolve_paths();
             let current_json_path = paths.cache_dir.join("current.json");
@@ -38,11 +132,9 @@ pub async fn run(
                                     .map(|v| v as u8)
                                     .unwrap_or(config.player.default_volume);
 
-                                let client = MpvClient::new();
                                 let resolved_url = if song.source == "local" {
                                     song.extra.clone().unwrap_or_default()
                                 } else {
-                                    let mgr = SourceManager::new();
                                     mgr.resolve_url(
                                         &song.source,
                                         &song.song_id,
@@ -79,11 +171,8 @@ pub async fn run(
         ));
     }
 
-    let config = lux_core::config::Config::load().unwrap_or_default();
-    let client = MpvClient::new();
+    // Case C: Direct link or local file (First element)
     let first = &id_or_urls[0];
-
-    // Check if it is a direct URL or local file path
     if first.starts_with("http://") || first.starts_with("https://") || Path::new(first).exists() {
         client.play_file_or_url(first)?;
 
@@ -104,7 +193,7 @@ pub async fn run(
             pic_url: None,
             songmid: None,
             hash: None,
-            extra: None,
+            extra: Some(first.to_string()),
         };
 
         save_currently_playing(&entry)?;
@@ -127,70 +216,88 @@ pub async fn run(
         return Ok(());
     }
 
-    // Otherwise, treat as CLI ID from the database cache
+    // Case D: Multiple or Single CLI IDs from Database
     crate::library::db::init_db()?;
-    let song = get_song_by_cli_id(first)?.ok_or_else(|| {
-        anyhow!(
-            "Song ID '{}' not found in search cache. Run 'rlx search' first.",
-            first
-        )
-    })?;
+    let mut songs = Vec::new();
+    for id in &id_or_urls {
+        if let Some(song) = get_song_by_cli_id(id)? {
+            songs.push(song);
+        } else {
+            return Err(anyhow!(
+                "Song ID '{}' not found in search cache. Run 'alx search' first.",
+                id
+            ));
+        }
+    }
 
-    // Determine quality
-    let quality = if let Some(ref q) = quality_str {
-        q.parse::<Quality>()
-            .map_err(|e| anyhow!("Invalid quality override: {}", e))?
-    } else {
-        config.source.default_quality
-    };
+    if shuffle {
+        let mut rng = rand::thread_rng();
+        songs.shuffle(&mut rng);
+    }
 
+    // Clear queue
+    let _ = crate::player::ipc::send_mpv_command(
+        &client.socket_path,
+        vec![serde_json::json!("playlist-clear")],
+    );
+
+    let first_song = &songs[0];
     if !json {
         println!(
             "{} Resolving playable URL for '{}'...",
             "⚡".yellow().bold(),
-            song.name.cyan()
+            first_song.name.cyan()
         );
     }
 
-    // Resolve URL using SourceManager
-    let mgr = SourceManager::new();
-    let resolved_url = mgr.resolve_url(&song.source, &song.song_id, quality)?;
+    let first_url = mgr.resolve_url(&first_song.source, &first_song.song_id, quality)?;
+    client.play_file_or_url(&first_url)?;
+    save_currently_playing(first_song)?;
+    let _ = add_to_history(first_song, None);
 
-    // Play in mpv
-    client.play_file_or_url(&resolved_url)?;
+    let mut added_songs = vec![first_song.clone()];
 
-    // Save currently playing info
-    save_currently_playing(&song)?;
+    for song in songs.iter().skip(1) {
+        if let Ok(url) = mgr.resolve_url(&song.source, &song.song_id, quality) {
+            client.append_file_or_url(&url)?;
+            added_songs.push(song.clone());
+        }
+    }
 
-    // Add to history
-    let _ = add_to_history(&song, None);
+    let updated_queue = crate::cmd::queue::PlayQueue {
+        songs: added_songs,
+        current_index: Some(0),
+    };
+    crate::cmd::queue::save_queue(&updated_queue)?;
 
     if json {
         println!(
             "{}",
             serde_json::json!({
                 "status": "playing",
-                "id": song.cli_id,
-                "name": song.name,
-                "singer": song.singer,
-                "source": song.source,
-                "url": resolved_url
+                "id": first_song.cli_id,
+                "name": first_song.name,
+                "singer": first_song.singer,
+                "source": first_song.source,
+                "url": first_url,
+                "queue_count": updated_queue.songs.len()
             })
         );
     } else {
         println!(
             "\n{} Started playing: {} — {}",
             "▶".green().bold(),
-            song.name.bold(),
-            song.singer.cyan()
+            first_song.name.bold(),
+            first_song.singer.cyan()
         );
-        if let Some(ref album) = song.album_name {
+        if let Some(ref album) = first_song.album_name {
             println!("  Album:  {}", album);
         }
         println!(
-            "  Source: {} | Quality: {}",
-            song.source.green(),
-            quality.to_string().yellow()
+            "  Source: {} | Quality: {} | Queue: {} songs",
+            first_song.source.green(),
+            quality.to_string().yellow(),
+            updated_queue.songs.len()
         );
         println!();
     }
