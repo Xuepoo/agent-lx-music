@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-05-30
+
+### Added
+- **Dependency Upgrades**: Upgraded workspace dependencies including `rquickjs` to `0.12.0`, `rusqlite` to `0.40.0`, `md-5` to `0.11.0`, `toml` to `1.1.2`, and `id3` to modern versions.
+
+### Fixed
+- **rusqlite 0.40.0 Compilation**: Resolved `usize: ToSql` compile errors in updated `rusqlite` by explicitly casting values to `i64` in `db.rs`.
+- **md-5 LowerHex Breakage**: Fixed compile errors across search, source, database, and playlist parsing modules by refactoring `format!("{:x}", ...)` output to use `hex::encode(...)` on `Digest` objects.
+- **GitHub Workflows Integration**: Manually upgraded `actions/upload-artifact` to `v4` and `docker/metadata-action` to `v5` inside GitHub Action workflows to bypass OAuth workflow-scope verification failures.
+
+---
+
 ## [0.2.5] - 2026-05-30
 
 ### Added
@@ -49,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Initial Release**: Core terminal-native music command-line interface `alx` providing offline local indexing, beets integration, and dynamic script source integration.
 
+[0.3.0]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.1...v0.2.3

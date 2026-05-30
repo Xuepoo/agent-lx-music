@@ -498,7 +498,7 @@ pub async fn run(
         // Generate stable 8-character CLI ID
         let hash_input = format!("{}-{}", song.source.as_str(), song.songmid);
         let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = format!("{:x}", digest)[..8].to_string();
+        let cli_id = hex::encode(digest)[..8].to_string();
 
         let entry = SearchCacheEntry {
             cli_id: cli_id.clone(),

@@ -151,7 +151,7 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
                 match fetch_res {
                     Ok(new_script) => {
                         let digest = md5::Md5::digest(new_script.as_bytes());
-                        let new_hash = format!("{:x}", digest);
+                        let new_hash = hex::encode(digest);
 
                         if new_hash == entry.content_hash {
                             if !json {
