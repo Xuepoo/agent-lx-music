@@ -41,7 +41,12 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                         s.push(' ');
                     }
                 }
-                eprintln!("[JS] {}", s.trim_end());
+                let has_debug = std::env::args().any(|arg| {
+                    arg == "--debug" || arg == "-d" || arg == "--verbose" || arg == "-v"
+                });
+                if has_debug {
+                    eprintln!("[JS] {}", s.trim_end());
+                }
                 Ok(())
             },
         ),

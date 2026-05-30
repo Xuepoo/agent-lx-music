@@ -24,6 +24,14 @@ pub struct Cli {
     #[arg(short, long, global = true, help = "Verbose logging")]
     pub verbose: bool,
 
+    #[arg(
+        short = 'd',
+        long,
+        global = true,
+        help = "Enable script engine debug logs"
+    )]
+    pub debug: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }

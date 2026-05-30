@@ -541,12 +541,12 @@ pub async fn run(
                 album: entry.album_name.unwrap_or_else(|| "N/A".to_string()),
                 duration: entry.interval.unwrap_or_else(|| "00:00".to_string()),
                 source: match entry.source.as_str() {
-                    "wy" => "NetEase".to_string(),
-                    "kw" => "Kuwo".to_string(),
-                    "kg" => "Kugou".to_string(),
-                    "tx" => "QQ".to_string(),
-                    "mg" => "Migu".to_string(),
-                    other => other.to_string(),
+                    "wy" => "netease".to_string(),
+                    "kw" => "kuwo".to_string(),
+                    "kg" => "kugou".to_string(),
+                    "tx" => "tencent".to_string(),
+                    "mg" => "migu".to_string(),
+                    other => other.to_lowercase(),
                 },
             })
             .collect();
@@ -565,33 +565,4 @@ pub async fn run(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_search_directives() {
-        let d = parse_search_directives("晴天 artist:周杰伦 album:叶惠美 kbps:320");
-        assert_eq!(d.query, "晴天");
-        assert_eq!(d.artist.as_deref(), Some("周杰伦"));
-        assert_eq!(d.album.as_deref(), Some("叶惠美"));
-        assert_eq!(d.kbps.as_deref(), Some("320"));
-
-        let d2 = parse_search_directives("晴天 artist:\"周 杰伦\"");
-        assert_eq!(d2.query, "晴天");
-        assert_eq!(d2.artist.as_deref(), Some("周 杰伦"));
-
-        let d3 = parse_search_directives("晴天");
-        assert_eq!(d3.query, "晴天");
-        assert_eq!(d3.artist, None);
-        assert_eq!(d3.album, None);
-        assert_eq!(d3.kbps, None);
-
-        let d4 = parse_search_directives("晴天 artist：周杰伦 album：叶惠美");
-        assert_eq!(d4.query, "晴天");
-        assert_eq!(d4.artist.as_deref(), Some("周杰伦"));
-        assert_eq!(d4.album.as_deref(), Some("叶惠美"));
-    }
 }

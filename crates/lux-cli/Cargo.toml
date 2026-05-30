@@ -9,6 +9,10 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 
+[lib]
+name = "agent_lx_music"
+path = "src/lib.rs"
+
 [[bin]]
 name = "alx"
 path = "src/main.rs"

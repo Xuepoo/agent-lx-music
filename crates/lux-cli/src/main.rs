@@ -1,9 +1,4 @@
-mod cli;
-mod cmd;
-pub mod library;
-pub mod player;
-pub mod source;
-
+use agent_lx_music::{cli, cmd};
 use clap::Parser;
 use colored::Colorize;
 use std::process;
