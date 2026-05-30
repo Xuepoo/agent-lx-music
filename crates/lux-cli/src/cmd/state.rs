@@ -8,7 +8,10 @@ pub fn run(json: bool) -> Result<()> {
     let paths = lux_core::config::resolve_paths();
 
     // 1. Check if mpv daemon is active
+    #[cfg(unix)]
     let stream_ok = std::os::unix::net::UnixStream::connect(&client.socket_path).is_ok();
+    #[cfg(not(unix))]
+    let stream_ok = false;
 
     if !stream_ok {
         if json {

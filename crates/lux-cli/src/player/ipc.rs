@@ -1,10 +1,15 @@
 use anyhow::{Result, anyhow};
 use serde_json::json;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
+
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 pub fn send_mpv_command(
     socket_path: &Path,
     args: Vec<serde_json::Value>,
@@ -44,4 +49,12 @@ pub fn send_mpv_command(
     }
 
     Err(anyhow!("No response from mpv"))
+}
+
+#[cfg(not(unix))]
+pub fn send_mpv_command(
+    _socket_path: &Path,
+    _args: Vec<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    Err(anyhow!("MPV IPC is not supported on this platform"))
 }
