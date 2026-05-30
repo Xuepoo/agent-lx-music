@@ -78,7 +78,7 @@ pub fn add_source_script(path_or_url: &str) -> Result<()> {
     // 3. Compute hash
     let mut hasher = md5::Md5::new();
     hasher.update(content.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let hash = hex::encode(hasher.finalize());
 
     // 4. Validate and capture 'inited' event via JsSandbox
     let sandbox = JsSandbox::new()?;

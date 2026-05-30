@@ -431,8 +431,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
             };
             let mut hasher = md5::Md5::new();
             hasher.update(text.as_bytes());
-            let hash = hasher.finalize();
-            Ok(format!("{:x}", hash))
+            Ok(hex::encode(hasher.finalize()))
         }),
     )?;
     crypto.set("md5", md5_fn)?;
