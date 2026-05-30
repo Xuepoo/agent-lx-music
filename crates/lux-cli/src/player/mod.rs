@@ -25,6 +25,7 @@ impl Default for MpvClient {
     }
 }
 
+#[cfg(unix)]
 impl MpvClient {
     pub fn new() -> Self {
         let config = lux_core::config::Config::load().unwrap_or_default();
@@ -485,6 +486,79 @@ impl MpvClient {
         if self.socket_path.exists() {
             let _ = fs::remove_file(&self.socket_path);
         }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+impl MpvClient {
+    pub fn new() -> Self {
+        let config = lux_core::config::Config::load().unwrap_or_default();
+        let paths = lux_core::config::resolve_paths();
+        let socket_path = paths.cache_dir.join("mpv.sock");
+        Self {
+            socket_path,
+            default_volume: config.player.default_volume,
+        }
+    }
+
+    pub fn ensure_running(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn play_file_or_url(&self, _path_or_url: &str) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn append_file_or_url(&self, _path_or_url: &str) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn pause(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn resume(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn set_volume(&self, _vol: u8) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn get_volume(&self) -> Result<u8> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn seek(&self, _val: &str) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn set_repeat(&self, _mode: &str) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn get_playback_status(&self) -> Result<Option<(String, f64, f64, u8, bool)>> {
+        Ok(None)
+    }
+
+    pub fn get_playing_index(&self) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
+    pub fn next(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn prev(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
+    pub fn quit(&self) -> Result<()> {
         Ok(())
     }
 }
