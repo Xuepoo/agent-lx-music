@@ -711,7 +711,7 @@ pub fn list_history_entries(limit: usize) -> Result<Vec<HistoryDbEntry>> {
         "SELECT song_id, source, name, singer, album_name, interval, pic_url, duration_played, played_at
          FROM play_history ORDER BY played_at DESC LIMIT ?1",
     )?;
-    let rows = stmt.query_map(params![limit], |row| {
+    let rows = stmt.query_map(params![limit as i64], |row| {
         Ok(HistoryDbEntry {
             song_id: row.get(0)?,
             source: row.get(1)?,
@@ -738,13 +738,13 @@ pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
         "SELECT song_id, source, name, singer, album_name, interval, pic_url
          FROM play_history ORDER BY played_at DESC LIMIT ?1",
     )?;
-    let rows = stmt.query_map(params![limit], |row| {
+    let rows = stmt.query_map(params![limit as i64], |row| {
         let song_id: String = row.get(0)?;
         let source: String = row.get(1)?;
         let hash_input = format!("{}-{}", source, song_id);
         use md5::Digest;
         let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = format!("{:x}", digest)[..8].to_string();
+        let cli_id = hex::encode(digest)[..8].to_string();
 
         Ok(SearchCacheEntry {
             cli_id,
@@ -908,7 +908,7 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
         let hash_input = format!("{}-{}", source, song_id);
         use md5::Digest;
         let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = format!("{:x}", digest)[..8].to_string();
+        let cli_id = hex::encode(digest)[..8].to_string();
 
         Ok(SearchCacheEntry {
             cli_id,

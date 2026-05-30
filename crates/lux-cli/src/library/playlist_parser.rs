@@ -228,7 +228,7 @@ pub async fn resolve_imported_track(
     if let (Some(sid), Some(src)) = (&track.song_id, &track.source) {
         let hash_input = format!("{}-{}", src, sid);
         let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = format!("{:x}", digest)[..8].to_string();
+        let cli_id = hex::encode(digest)[..8].to_string();
 
         let entry = SearchCacheEntry {
             cli_id,
@@ -333,7 +333,7 @@ pub async fn resolve_imported_track(
                 // Resolved successfully! Construct cache entry and commit
                 let hash_input = format!("{}-{}", candidate.source.as_str(), candidate.songmid);
                 let digest = md5::Md5::digest(hash_input.as_bytes());
-                let cli_id = format!("{:x}", digest)[..8].to_string();
+                let cli_id = hex::encode(digest)[..8].to_string();
 
                 let entry = SearchCacheEntry {
                     cli_id,
