@@ -582,7 +582,14 @@ async fn execute_download(
     let final_filename = format!("{}.{}", final_name, extension);
     let final_path = output_dir.join(&final_filename);
 
-    fs::rename(&part_path, &final_path)?;
+    if let Err(e) = fs::rename(&part_path, &final_path) {
+        if e.raw_os_error() == Some(18) {
+            fs::copy(&part_path, &final_path)?;
+            fs::remove_file(&part_path)?;
+        } else {
+            return Err(e.into());
+        }
+    }
 
     Ok(final_path)
 }
