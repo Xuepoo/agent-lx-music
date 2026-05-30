@@ -21,7 +21,7 @@ readme = "README.md"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 thiserror = "2.0.11"
-toml = "0.8.19"
+toml = "1.1.2"
 dirs = "6.0.0"
 async-trait = "0.1.86"
 
