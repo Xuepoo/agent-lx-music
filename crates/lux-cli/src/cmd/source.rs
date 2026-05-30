@@ -214,7 +214,7 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
                 } else {
                     "FAIL".red().to_string()
                 },
-                message: match init_res {
+                message: match &init_res {
                     Ok(v) => format!(
                         "Name: {}, Version: {}",
                         v["name"].as_str().unwrap_or("N/A"),
@@ -225,6 +225,9 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
             });
 
             if init_ok {
+                let init_val = init_res.as_ref().unwrap();
+                let sources_obj = init_val.get("sources");
+
                 let platforms_list: Vec<String> =
                     serde_json::from_str(&entry.platforms).unwrap_or_default();
                 for plat in platforms_list {
@@ -234,78 +237,134 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
                         }
                     }
 
-                    // Phase 2: Search Verification
-                    let search_sandbox = JsSandbox::new()?;
-                    let search_res = search_sandbox.execute_search(&script, &plat, &keyword, 1, 5);
-                    let search_ok = search_res.is_ok();
+                    // Check actions for this platform from inited data
+                    let mut supports_search = false;
+                    let mut supports_resolve = false;
 
-                    test_results.push(TestResultEntry {
-                        platform: plat.clone(),
-                        action: "Search".to_string(),
-                        status: if search_ok {
-                            "PASS".green().to_string()
+                    if let Some(sources_map) = sources_obj.and_then(|s| s.as_object()) {
+                        if let Some(plat_meta) = sources_map.get(&plat).and_then(|p| p.as_object())
+                        {
+                            if let Some(actions_arr) =
+                                plat_meta.get("actions").and_then(|a| a.as_array())
+                            {
+                                for act in actions_arr {
+                                    if let Some(act_str) = act.as_str() {
+                                        if act_str == "musicSearch" {
+                                            supports_search = true;
+                                        }
+                                        if act_str == "musicUrl" {
+                                            supports_resolve = true;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Default to true if actions are omitted
+                                supports_search = true;
+                                supports_resolve = true;
+                            }
                         } else {
-                            "FAIL".red().to_string()
-                        },
-                        message: match search_res {
-                            Ok(ref s) => {
-                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
-                                    let len = val["list"].as_array().map(|a| a.len()).unwrap_or(0);
-                                    format!("Found {} songs", len)
-                                } else {
-                                    "Invalid JSON search result format".to_string()
+                            supports_search = true;
+                            supports_resolve = true;
+                        }
+                    } else {
+                        supports_search = true;
+                        supports_resolve = true;
+                    }
+
+                    if supports_search {
+                        // Phase 2: Search Verification
+                        let search_sandbox = JsSandbox::new()?;
+                        let search_res =
+                            search_sandbox.execute_search(&script, &plat, &keyword, 1, 5);
+                        let search_ok = search_res.is_ok();
+
+                        test_results.push(TestResultEntry {
+                            platform: plat.clone(),
+                            action: "Search".to_string(),
+                            status: if search_ok {
+                                "PASS".green().to_string()
+                            } else {
+                                "FAIL".red().to_string()
+                            },
+                            message: match search_res {
+                                Ok(ref s) => {
+                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
+                                        let len =
+                                            val["list"].as_array().map(|a| a.len()).unwrap_or(0);
+                                        format!("Found {} songs", len)
+                                    } else {
+                                        "Invalid JSON search result format".to_string()
+                                    }
+                                }
+                                Err(ref e) => e.to_string(),
+                            },
+                        });
+
+                        // Phase 3: URL Resolution Verification
+                        if search_ok && supports_resolve {
+                            let search_json = search_res.unwrap();
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&search_json)
+                            {
+                                if let Some(first_song) =
+                                    val["list"].as_array().and_then(|a| a.first())
+                                {
+                                    let songmid = first_song["songmid"]
+                                        .as_str()
+                                        .or_else(|| first_song["id"].as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    let resolve_sandbox = JsSandbox::new()?;
+                                    let resolve_res = resolve_sandbox.execute_resolve(
+                                        &script,
+                                        &plat,
+                                        &songmid,
+                                        "128k",
+                                        first_song.clone(),
+                                    );
+                                    let resolve_ok = resolve_res.is_ok();
+
+                                    test_results.push(TestResultEntry {
+                                        platform: plat.clone(),
+                                        action: "Resolve URL".to_string(),
+                                        status: if resolve_ok {
+                                            "PASS".green().to_string()
+                                        } else {
+                                            "FAIL".red().to_string()
+                                        },
+                                        message: match resolve_res {
+                                            Ok(url) => {
+                                                if url.trim().starts_with("http")
+                                                    && !url.contains("horse.mp3")
+                                                    && !url.contains("example.com")
+                                                {
+                                                    format!("Success: {:.40}...", url)
+                                                } else {
+                                                    format!(
+                                                        "Hijacked / Invalid URL resolved: {}",
+                                                        url
+                                                    )
+                                                }
+                                            }
+                                            Err(e) => e.to_string(),
+                                        },
+                                    });
                                 }
                             }
-                            Err(ref e) => e.to_string(),
-                        },
-                    });
-
-                    // Phase 3: URL Resolution Verification
-                    if search_ok {
-                        let search_json = search_res.unwrap();
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&search_json) {
-                            if let Some(first_song) = val["list"].as_array().and_then(|a| a.first())
-                            {
-                                let songmid = first_song["songmid"]
-                                    .as_str()
-                                    .or_else(|| first_song["id"].as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-
-                                let resolve_sandbox = JsSandbox::new()?;
-                                let resolve_res = resolve_sandbox.execute_resolve(
-                                    &script,
-                                    &plat,
-                                    &songmid,
-                                    "128k",
-                                    first_song.clone(),
-                                );
-                                let resolve_ok = resolve_res.is_ok();
-
-                                test_results.push(TestResultEntry {
-                                    platform: plat.clone(),
-                                    action: "Resolve URL".to_string(),
-                                    status: if resolve_ok {
-                                        "PASS".green().to_string()
-                                    } else {
-                                        "FAIL".red().to_string()
-                                    },
-                                    message: match resolve_res {
-                                        Ok(url) => {
-                                            if url.trim().starts_with("http")
-                                                && !url.contains("horse.mp3")
-                                                && !url.contains("example.com")
-                                            {
-                                                format!("Success: {:.40}...", url)
-                                            } else {
-                                                format!("Hijacked / Invalid URL resolved: {}", url)
-                                            }
-                                        }
-                                        Err(e) => e.to_string(),
-                                    },
-                                });
-                            }
                         }
+                    } else {
+                        test_results.push(TestResultEntry {
+                            platform: plat.clone(),
+                            action: "Search".to_string(),
+                            status: "SKIP".yellow().to_string(),
+                            message: "Not supported by source actions".to_string(),
+                        });
+                        test_results.push(TestResultEntry {
+                            platform: plat.clone(),
+                            action: "Resolve URL".to_string(),
+                            status: "SKIP".yellow().to_string(),
+                            message: "Requires Search support to retrieve song info".to_string(),
+                        });
                     }
                 }
             }
