@@ -529,6 +529,10 @@ pub async fn run(
         println!("{}", serialized);
     } else if cache_entries.is_empty() {
         println!("No songs found for '{}'.", keyword.bold());
+        #[cfg(not(feature = "lux-native"))]
+        {
+            println!("{}", "Hint: Native search engines are not compiled in this build. Ensure you compile with default features/--features native-all or add valid dynamic JS custom sources to enable search functionality.".yellow());
+        }
     } else {
         let table_data: Vec<SearchTableEntry> = cache_entries
             .into_iter()

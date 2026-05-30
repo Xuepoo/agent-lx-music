@@ -18,7 +18,7 @@ name = "alx"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["native-all"]
 native-all = ["native-wy", "native-kw", "native-kg", "native-tx", "native-mg"]
 native-wy = ["lux-native", "lux-native/wy"]
 native-kw = ["lux-native", "lux-native/kw"]

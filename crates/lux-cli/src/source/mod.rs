@@ -54,7 +54,17 @@ impl SourceManager {
                 song_id,
                 platform
             );
-            let db_entries = crate::library::db::list_sources().unwrap_or_default();
+            let config = lux_core::config::Config::load().unwrap_or_default();
+            let priority_list = config.source.priority;
+
+            let mut db_entries = crate::library::db::list_sources().unwrap_or_default();
+            db_entries.sort_by_key(|entry| {
+                priority_list
+                    .iter()
+                    .position(|p| p == &entry.id)
+                    .unwrap_or(usize::MAX)
+            });
+
             for entry in db_entries {
                 if !entry.enabled {
                     continue;
