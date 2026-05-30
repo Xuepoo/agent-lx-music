@@ -63,7 +63,7 @@ Once the system dependencies are installed, you can clone and build the binary:
 git clone https://github.com/Xuepoo/agent-lx-music.git
 cd agent-lx-music
 
-# 2. Build optimized release target
+# 2. Build optimized release target (native-all feature is enabled by default to compile native scrapers)
 cargo build --release
 
 # 3. View global options and command list

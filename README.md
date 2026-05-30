@@ -63,7 +63,7 @@
 git clone https://github.com/Xuepoo/agent-lx-music.git
 cd agent-lx-music
 
-# 2. 编译 Release 生产二进制包
+# 2. 编译 Release 生产二进制包 (默认已开启 native-all 特性以包含全平台原生搜索引擎)
 cargo build --release
 
 # 3. 查看全局使用菜单

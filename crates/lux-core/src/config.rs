@@ -33,11 +33,7 @@ impl Default for SourceSettings {
             default_quality: Quality::Q320k,
             quality_fallback: vec![Quality::Q320k, Quality::Q128k, Quality::Flac],
             js_priority: true,
-            priority: vec![
-                "sixyin_v1.2.1".to_string(),
-                "ikun_v22".to_string(),
-                "huibq_v1.2.0".to_string(),
-            ],
+            priority: vec!["_4".to_string(), "_9.393DeepSeek".to_string()],
             platform_priority: default_platform_priority(),
         }
     }
@@ -366,7 +362,7 @@ js_priority = true
 
 # Source priority list — controls search order and URL resolution fallback
 # Sources not listed here get appended at the end in alphabetical order
-priority = ["sixyin_v1.2.1", "ikun_v22", "huibq_v1.2.0"]
+priority = ["_4", "_9.393DeepSeek"]
 
 # Platform search and matching priority order
 platform_priority = ["wy", "kw", "tx", "mg", "kg"]
