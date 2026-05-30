@@ -29,6 +29,9 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             artifact_name: alx-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: alx-windows-x86_64
 
     steps:
       - name: Checkout code
@@ -47,6 +50,9 @@ jobs:
         if: runner.os != 'Windows'
         run: mv target/${{ matrix.target }}/release/alx ${{ matrix.artifact_name }}
 
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: mv target/${{ matrix.target }}/release/alx.exe ${{ matrix.artifact_name }}.exe
 
       - name: Package for Linux distributions
         if: runner.os == 'Linux'
@@ -79,7 +85,8 @@ jobs:
           ./nfpm pkg --packager rpm --target alx-linux-${PKG_ARCH}.rpm
           ./nfpm pkg --packager archlinux --target alx-linux-${PKG_ARCH}.pkg.tar.zst
 
-      - name: Upload artifact
+      - name: Upload artifact (Non-Windows)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -88,6 +95,13 @@ jobs:
             *.deb
             *.rpm
             *.pkg.tar.zst
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.exe
 
   release:
     name: Create Release
@@ -121,17 +135,17 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish lux-core
-        run: cargo publish -p lux-core
+        run: cargo publish -p lux-core || echo " lux-core already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish lux-native
-        run: cargo publish -p lux-native
+        run: cargo publish -p lux-native || echo "lux-native already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish agent-lx-music
-        run: cargo publish -p agent-lx-music
+        run: cargo publish -p agent-lx-music || echo "agent-lx-music already published"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
@@ -190,10 +204,189 @@ jobs:
           cd aur-bin
           CLEAN_VERSION=${{ github.ref_name }}
           CLEAN_VERSION=${CLEAN_VERSION#v}
-          sed -i "s/^pkgver=.*/pkgver=${CLEAN_VERSION}/" PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+
+          # 等待 GitHub Release 资产在 CDN 生效，避免 updpkgsums 下载到 404 页面算出错误的 sha256
+          URL="https://github.com/Xuepoo/agent-lx-music/releases/download/v${CLEAN_VERSION}/alx-linux-x86_64"
+          echo "[*] Checking if release asset is available: $URL"
+          for i in {1..30}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "$URL")
+            if [ "$STATUS" = "200" ]; then
+              echo "[+] Asset is ready (HTTP 200)!"
+              break
+            fi
+            echo "[-] Asset not ready yet (HTTP $STATUS). Waiting 10s... (Attempt $i/30)"
+            sleep 10
+          done
+
+          cat > PKGBUILD << 'EOF'
+          # Maintainer: Xuepoo <xuepoofoter@gmail.com>
+          pkgname=agent-lx-music-bin
+          pkgver=VERSION_PLACEHOLDER
+          pkgrel=1
+          pkgdesc="A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence. (Pre-compiled)"
+          arch=('x86_64' 'aarch64')
+          url="https://github.com/Xuepoo/agent-lx-music"
+          license=('MIT')
+          provides=('agent-lx-music')
+          conflicts=('agent-lx-music')
+          source=("LICENSE-VERSION_PLACEHOLDER::https://raw.githubusercontent.com/Xuepoo/agent-lx-music/vVERSION_PLACEHOLDER/LICENSE")
+          source_x86_64=("alx-linux-x86_64-VERSION_PLACEHOLDER::https://github.com/Xuepoo/agent-lx-music/releases/download/vVERSION_PLACEHOLDER/alx-linux-x86_64")
+          source_aarch64=("alx-linux-aarch64-VERSION_PLACEHOLDER::https://github.com/Xuepoo/agent-lx-music/releases/download/vVERSION_PLACEHOLDER/alx-linux-aarch64")
+          sha256sums=('a0609908bbcd4b5a91e8e2ce9e302a7adfc57957d16ad3ef5ef532839e186243')
+          sha256sums_x86_64=('SKIP')
+          sha256sums_aarch64=('SKIP')
+
+          package() {
+            install -Dm755 "$srcdir/alx-linux-$CARCH-VERSION_PLACEHOLDER" "$pkgdir/usr/bin/alx"
+            install -Dm644 "$srcdir/LICENSE-VERSION_PLACEHOLDER" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+          }
+          EOF
+          sed -i "s/VERSION_PLACEHOLDER/${CLEAN_VERSION}/g" PKGBUILD
+
           chown -R builder:builder .
           su builder -c "updpkgsums && makepkg --printsrcinfo > .SRCINFO"
           git add PKGBUILD .SRCINFO
           git commit -m "Update to v${CLEAN_VERSION}" || true
           git push origin master
+
+  publish-homebrew:
+    name: Publish to Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          VERSION="${{ github.ref_name }}"
+          CLEAN_VERSION=${VERSION#v}
+          echo "version=${CLEAN_VERSION}" >> "$GITHUB_OUTPUT"
+
+          sleep 15
+
+          SHA_LINUX=$(sha256sum artifacts/alx-linux-x86_64/alx-linux-x86_64 | awk '{print $1}')
+          SHA_MACOS_X86=$(sha256sum artifacts/alx-macos-x86_64/alx-macos-x86_64 | awk '{print $1}')
+          SHA_MACOS_ARM=$(sha256sum artifacts/alx-macos-aarch64/alx-macos-aarch64 | awk '{print $1}')
+
+          echo "sha_linux=${SHA_LINUX}" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_x86=${SHA_MACOS_X86}" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_arm=${SHA_MACOS_ARM}" >> "$GITHUB_OUTPUT"
+
+      - name: Update Formula
+        run: |
+          VERSION="${{ steps.sha.outputs.version }}"
+          REPO_URL="https://x-access-token:${{ secrets.GH_PAT }}@github.com/Xuepoo/homebrew-tap.git"
+
+          git clone "${REPO_URL}" tap
+          cd tap
+          mkdir -p Formula
+
+          cat > Formula/agent-lx-music.rb << 'FORMULA'
+          class AgentLxMusic < Formula
+            desc "A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence"
+            homepage "https://github.com/Xuepoo/agent-lx-music"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/Xuepoo/agent-lx-music/releases/download/vVERSION_PLACEHOLDER/alx-macos-aarch64"
+                sha256 "SHA_MACOS_ARM_PLACEHOLDER"
+              else
+                url "https://github.com/Xuepoo/agent-lx-music/releases/download/vVERSION_PLACEHOLDER/alx-macos-x86_64"
+                sha256 "SHA_MACOS_X86_PLACEHOLDER"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/Xuepoo/agent-lx-music/releases/download/vVERSION_PLACEHOLDER/alx-linux-x86_64"
+              sha256 "SHA_LINUX_PLACEHOLDER"
+            end
+
+            def install
+              if OS.mac?
+                if Hardware::CPU.arm?
+                  bin.install "alx-macos-aarch64" => "alx"
+                else
+                  bin.install "alx-macos-x86_64" => "alx"
+                end
+              elsif OS.linux?
+                bin.install "alx-linux-x86_64" => "alx"
+              end
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/alx --version")
+            end
+          end
+          FORMULA
+
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" Formula/agent-lx-music.rb
+          sed -i "s/SHA_MACOS_ARM_PLACEHOLDER/${{ steps.sha.outputs.sha_macos_arm }}/g" Formula/agent-lx-music.rb
+          sed -i "s/SHA_MACOS_X86_PLACEHOLDER/${{ steps.sha.outputs.sha_macos_x86 }}/g" Formula/agent-lx-music.rb
+          sed -i "s/SHA_LINUX_PLACEHOLDER/${{ steps.sha.outputs.sha_linux }}/g" Formula/agent-lx-music.rb
+
+          git config user.name "Xuepoo (CI)"
+          git config user.email "xuepoofoter@gmail.com"
+          git add Formula/agent-lx-music.rb
+          git commit -m "chore: update agent-lx-music to v${VERSION}" || true
+          git push
+
+  publish-scoop:
+    name: Publish to Scoop Bucket
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Calculate SHA256 and Update
+        run: |
+          VERSION="${{ github.ref_name }}"
+          CLEAN_VERSION=${VERSION#v}
+          SHA_WIN=$(sha256sum artifacts/alx-windows-x86_64/alx-windows-x86_64.exe | awk '{print $1}')
+
+          REPO_URL="https://x-access-token:${{ secrets.GH_PAT }}@github.com/Xuepoo/scoop-bucket.git"
+          git clone "${REPO_URL}" bucket
+          cd bucket
+          mkdir -p bucket
+
+          cat > bucket/agent-lx-music.json << EOF
+          {
+            "version": "${CLEAN_VERSION}",
+            "description": "A terminal-native music CLI replacing lx-music-desktop, powered by Agentic intelligence",
+            "homepage": "https://github.com/Xuepoo/agent-lx-music",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/Xuepoo/agent-lx-music/releases/download/v${CLEAN_VERSION}/alx-windows-x86_64.exe",
+                "hash": "${SHA_WIN}",
+                "bin": [["alx-windows-x86_64.exe", "alx"]]
+              }
+            },
+            "checkver": {
+              "github": "https://github.com/Xuepoo/agent-lx-music"
+            },
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/Xuepoo/agent-lx-music/releases/download/v\$version/alx-windows-x86_64.exe"
+                }
+              }
+            }
+          }
+          EOF
+
+          git config user.name "Xuepoo (CI)"
+          git config user.email "xuepoofoter@gmail.com"
+          git add bucket/agent-lx-music.json
+          git commit -m "chore: update agent-lx-music to v${CLEAN_VERSION}" || true
+          git push
