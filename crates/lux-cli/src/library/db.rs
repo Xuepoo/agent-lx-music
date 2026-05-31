@@ -421,6 +421,16 @@ pub fn update_download_status(id: i64, status: &str, error_message: Option<&str>
     Ok(())
 }
 
+pub fn update_download_quality(id: i64, quality: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "UPDATE downloads SET quality = ?1, updated_at = ?2 WHERE id = ?3",
+        params![quality, now, id],
+    )?;
+    Ok(())
+}
+
 pub fn update_download_progress(
     id: i64,
     progress: f64,

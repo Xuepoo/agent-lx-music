@@ -1,4 +1,5 @@
 #![allow(
+    deprecated,
     clippy::manual_div_ceil,
     clippy::match_result_ok,
     clippy::manual_flatten,
@@ -7,7 +8,7 @@
     clippy::collapsible_str_replace
 )]
 use crate::source::runtime::SandboxState;
-use aes::cipher::{BlockEncryptMut, KeyInit, KeyIvInit};
+use aes::cipher::{BlockCipherEncrypt, BlockModeEncrypt, KeyInit, KeyIvInit};
 use anyhow::{Result, anyhow};
 use cbc::Encryptor;
 use flate2::Compression;
@@ -500,9 +501,8 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     let mut out = vec![0u8; padded.len()];
                     let mut enc_cbc = Encryptor::<aes::Aes128>::new_from_slices(&key, &iv).unwrap();
                     for chunk_idx in (0..padded.len()).step_by(16) {
-                        let mut block =
-                            aes::Block::clone_from_slice(&padded[chunk_idx..chunk_idx + 16]);
-                        enc_cbc.encrypt_block_b2b_mut(&block.clone(), &mut block);
+                        let mut block = *aes::Block::from_slice(&padded[chunk_idx..chunk_idx + 16]);
+                        enc_cbc.encrypt_block_b2b(&block.clone(), &mut block);
                         out[chunk_idx..chunk_idx + 16].copy_from_slice(&block);
                     }
                     out
@@ -513,14 +513,13 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     let mut padded = data.clone();
                     padded.extend(std::iter::repeat(pad_len as u8).take(pad_len));
 
-                    let mut cipher = aes::Aes128::new_from_slice(&key)
+                    let cipher = aes::Aes128::new_from_slice(&key)
                         .map_err(|e| throw_err(&ctx, anyhow!("AES-ECB key init failed: {}", e)))?;
 
                     let mut out = vec![0u8; padded.len()];
                     for chunk_idx in (0..padded.len()).step_by(16) {
-                        let mut block =
-                            aes::Block::clone_from_slice(&padded[chunk_idx..chunk_idx + 16]);
-                        cipher.encrypt_block_b2b_mut(&block.clone(), &mut block);
+                        let mut block = *aes::Block::from_slice(&padded[chunk_idx..chunk_idx + 16]);
+                        cipher.encrypt_block_b2b(&block.clone(), &mut block);
                         out[chunk_idx..chunk_idx + 16].copy_from_slice(&block);
                     }
                     out
