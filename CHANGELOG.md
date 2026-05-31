@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.3] - 2026-05-31
+
+### Fixed
+- **Relative Path Playback**: Resolved relative paths in `alx play` (and downstream `expand_path` pipeline in `config.rs`) by converting any platform relative paths to absolute using `std::env::current_dir()`. This ensures files specified by relative paths (e.g. `alx play file.mp3`) are correctly located by the detached mpv daemon process running from a different working directory.
+
+---
+
 ## [0.3.2] - 2026-05-31
 
 ### Added
@@ -88,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Initial Release**: Core terminal-native music command-line interface `alx` providing offline local indexing, beets integration, and dynamic script source integration.
 
+[0.3.3]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.5...v0.3.0

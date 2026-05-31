@@ -339,7 +339,11 @@ pub fn expand_path(path_str: &str) -> PathBuf {
         i += 1;
     }
 
-    PathBuf::from(final_path)
+    let p = PathBuf::from(final_path);
+    if p.is_relative() {
+        return std::env::current_dir().map(|cwd| cwd.join(&p)).unwrap_or(p);
+    }
+    p
 }
 
 fn get_default_config_toml() -> &'static str {
@@ -506,6 +510,12 @@ mod tests {
 
         let expanded_braces = expand_path("/tmp/${TEST_DIR}_test/$TEST_SUB");
         assert_eq!(expanded_braces, PathBuf::from("/tmp/foo_test/bar"));
+
+        // Test relative path resolution
+        if let Ok(cwd) = std::env::current_dir() {
+            let expanded_relative = expand_path("some/relative/path.mp3");
+            assert_eq!(expanded_relative, cwd.join("some/relative/path.mp3"));
+        }
 
         unsafe {
             env::remove_var("TEST_DIR");
