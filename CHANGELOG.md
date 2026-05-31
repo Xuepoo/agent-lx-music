@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.1] - 2026-05-31
+
+### Added
+- **Automatic Quality Fallback**: Implemented custom download fallback algorithm (`get_fallback_qualities`) in `crates/lux-cli/src/cmd/download.rs`. Downloads encountering transient stream/decoding network failures automatically drop down through standard profiles (`flac24bit -> flac -> 320k -> 192k -> 128k`) sequentially.
+- **Fallbacked Quality Synchronization**: Integrated database progress syncing. In the event of a successful fallback resolution, the local SQLite database task record is automatically updated to match the final downloaded stream quality.
+
+### Fixed
+- **Purge Stale Sources**: Purged expired source IDs (`ikun_v22`, `huibq_lxmusic_v1.2.0`) from local config templates, active XDG configuration scopes, and architectural specification documentation.
+- **Crypto Dependencies Adaptations**: Safely migrated `aes` to `0.9.1` and `cbc` to `0.2.1` by refactoring custom Webcrypt bindings in `bridge.rs` to implement `BlockCipherEncrypt` and `BlockModeEncrypt` using modern `encrypt_block_b2b` interfaces.
+- **Rand Upgrade Reversal**: Intercepted and blocked breaking `rand v0.9` dependency propagation to avoid structural traits collisions with RSA cryptographic suites.
+
+---
+
 ## [0.3.0] - 2026-05-30
 
 ### Added
@@ -61,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Initial Release**: Core terminal-native music command-line interface `alx` providing offline local indexing, beets integration, and dynamic script source integration.
 
+[0.3.1]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.3...v0.2.4
