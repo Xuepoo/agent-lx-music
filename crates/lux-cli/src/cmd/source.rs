@@ -37,6 +37,24 @@ struct TestResultEntry {
     message: String,
 }
 
+#[derive(Tabled, serde::Serialize)]
+struct SourceHealthTableEntry {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "Name")]
+    name: String,
+    #[tabled(rename = "Total Requests")]
+    total_requests: i64,
+    #[tabled(rename = "Failed Requests")]
+    failed_requests: i64,
+    #[tabled(rename = "Error Rate")]
+    error_rate: String,
+    #[tabled(rename = "Consecutive Fails")]
+    consecutive_fails: i64,
+    #[tabled(rename = "Status")]
+    status: String,
+}
+
 #[allow(clippy::collapsible_if)]
 pub async fn run(action: SourceAction, json: bool) -> Result<()> {
     match action {
@@ -435,6 +453,73 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
                 }
             } else {
                 return Err(anyhow!("Source with ID '{}' not found.", id));
+            }
+        }
+        SourceAction::Health => {
+            crate::library::db::init_db()?;
+            let sources = list_sources()?;
+            let healths = crate::library::db::list_sources_health()?;
+            let mut health_map = std::collections::HashMap::new();
+            for h in healths {
+                health_map.insert(h.source_id.clone(), h);
+            }
+
+            let mut entries = Vec::new();
+
+            for source in sources {
+                let h_entry = health_map.get(&source.id);
+                let total = h_entry.map(|h| h.total_requests).unwrap_or(0);
+                let failed = h_entry.map(|h| h.failed_requests).unwrap_or(0);
+                let consecutive = h_entry.map(|h| h.consecutive_fails).unwrap_or(0);
+
+                let error_rate_val = if total > 0 {
+                    (failed as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let error_rate = format!("{:.1}%", error_rate_val);
+
+                let is_broken =
+                    crate::library::db::get_source_circuit_broken_until(&source.id)?.is_some();
+
+                let status = if is_broken {
+                    "CIRCUIT BROKEN".to_string()
+                } else if consecutive > 0 {
+                    "DEGRADED".to_string()
+                } else {
+                    "HEALTHY".to_string()
+                };
+
+                entries.push(SourceHealthTableEntry {
+                    id: source.id,
+                    name: source.name,
+                    total_requests: total,
+                    failed_requests: failed,
+                    error_rate,
+                    consecutive_fails: consecutive,
+                    status,
+                });
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else if entries.is_empty() {
+                println!("No custom music sources registered yet.");
+            } else {
+                let table_data: Vec<SourceHealthTableEntry> = entries
+                    .into_iter()
+                    .map(|mut entry| {
+                        entry.status = match entry.status.as_str() {
+                            "CIRCUIT BROKEN" => "CIRCUIT BROKEN".red().bold().to_string(),
+                            "DEGRADED" => "DEGRADED".yellow().to_string(),
+                            _ => "HEALTHY".green().to_string(),
+                        };
+                        entry
+                    })
+                    .collect();
+
+                let table = Table::new(table_data).to_string();
+                println!("{}", table);
             }
         }
     }

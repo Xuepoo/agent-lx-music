@@ -492,6 +492,8 @@ async fn execute_download_with_quality(
     let total_bytes = content_len + existing_bytes;
 
     let mut bytes_downloaded = existing_bytes;
+    let mut last_progress = 0.0;
+    let mut last_update_time = Instant::now();
 
     // Stream download loop
     while let Some(chunk) = response.chunk().await? {
@@ -500,8 +502,20 @@ async fn execute_download_with_quality(
 
         if total_bytes > 0 {
             let progress = bytes_downloaded as f64 / total_bytes as f64;
-            db::update_download_progress(task.id, progress, bytes_downloaded, total_bytes)?;
+            let now = Instant::now();
+            if now.duration_since(last_update_time) >= Duration::from_millis(250)
+                || (progress - last_progress).abs() >= 0.025
+            {
+                db::update_download_progress(task.id, progress, bytes_downloaded, total_bytes)?;
+                last_progress = progress;
+                last_update_time = now;
+            }
         }
+    }
+
+    if total_bytes > 0 {
+        let progress = bytes_downloaded as f64 / total_bytes as f64;
+        let _ = db::update_download_progress(task.id, progress, bytes_downloaded, total_bytes);
     }
 
     file.flush()?;
@@ -594,9 +608,15 @@ async fn execute_download_with_quality(
         }
     }
 
+    // Integrity check
+    let meta = fs::metadata(&part_path)?;
+    if meta.len() == 0 {
+        return Err(anyhow!("Downloaded file is empty (integrity check failed)"));
+    }
+
     // Rename atomically to the final filename in output_dir
-    let clean_title = task.name.replace(['/', '\\'], "-");
-    let clean_singer = task.singer.replace(['/', '\\'], "-");
+    let clean_title = sanitize_filename(&task.name);
+    let clean_singer = sanitize_filename(&task.singer);
     let final_name = config
         .download
         .filename_template
@@ -610,11 +630,48 @@ async fn execute_download_with_quality(
             fs::copy(&part_path, &final_path)?;
             fs::remove_file(&part_path)?;
         } else {
-            return Err(e.into());
+            return Err(anyhow!(
+                "Failed to place file on path '{}': {}",
+                final_filename,
+                e
+            ));
         }
     }
 
+    // OS level disk synchronization barrier
+    if let Ok(f) = File::open(&final_path) {
+        let _ = f.sync_all();
+    }
+
     Ok(final_path)
+}
+
+pub fn sanitize_filename(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || ['/', '\\', '?', '*', ':', '"', '<', '>', '|'].contains(&c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+
+    let mut trimmed = sanitized.trim().to_string();
+    while trimmed.contains("--") {
+        trimmed = trimmed.replace("--", "-");
+    }
+
+    if trimmed.chars().count() > 180 {
+        trimmed = trimmed.chars().take(180).collect();
+    }
+
+    if trimmed.is_empty() {
+        "Unknown".to_string()
+    } else {
+        trimmed
+    }
 }
 
 pub fn get_fallback_qualities(initial: lux_core::types::Quality) -> Vec<lux_core::types::Quality> {
@@ -666,5 +723,25 @@ mod tests {
         // 3. Q128k should only have 128k
         let chain_128 = get_fallback_qualities(Quality::Q128k);
         assert_eq!(chain_128, vec![Quality::Q128k]);
+    }
+
+    #[test]
+    fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("Normal Title"), "Normal Title");
+        assert_eq!(sanitize_filename("Title/With\\Slash"), "Title-With-Slash");
+        assert_eq!(
+            sanitize_filename("emoji 🎶 & special ⚡?"),
+            "emoji 🎶 & special ⚡-"
+        );
+        assert_eq!(
+            sanitize_filename("   leading and trailing   "),
+            "leading and trailing"
+        );
+        assert_eq!(sanitize_filename("multiple----dashes"), "multiple-dashes");
+        assert_eq!(sanitize_filename(""), "Unknown");
+
+        let long_title = "a".repeat(200);
+        let cleaned_long = sanitize_filename(&long_title);
+        assert_eq!(cleaned_long.chars().count(), 180);
     }
 }

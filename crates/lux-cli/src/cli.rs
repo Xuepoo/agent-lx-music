@@ -406,6 +406,8 @@ pub enum SourceAction {
     },
     /// Show detailed info about an installed source
     Info { id: String },
+    /// Check health status and circuit breaker status of registered sources
+    Health,
 }
 
 #[derive(Subcommand, Debug, Clone)]
