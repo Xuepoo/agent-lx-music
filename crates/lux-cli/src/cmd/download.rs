@@ -371,8 +371,32 @@ async fn process_single_task(
 ) -> Result<()> {
     db::update_download_status(task.id, "downloading", None)?;
 
-    match execute_download(&task, &client, &sm).await {
+    use lux_core::types::Quality;
+    let initial_quality = std::str::FromStr::from_str(&task.quality).unwrap_or(Quality::Q320k);
+    let qualities_to_try = get_fallback_qualities(initial_quality);
+
+    let mut download_result = Err(anyhow!("No qualities to try"));
+    let mut final_successful_quality = initial_quality;
+
+    for &quality in &qualities_to_try {
+        let _ = db::update_download_quality(task.id, quality.as_str());
+
+        match execute_download_with_quality(&task, quality, &client, &sm).await {
+            Ok(path) => {
+                download_result = Ok(path);
+                final_successful_quality = quality;
+                break;
+            }
+            Err(e) => {
+                download_result = Err(e);
+            }
+        }
+    }
+
+    match download_result {
         Ok(final_path) => {
+            // Update to final successful quality and complete status
+            let _ = db::update_download_quality(task.id, final_successful_quality.as_str());
             db::update_download_status(task.id, "completed", None)?;
 
             // Post-download Beets Import Hook
@@ -394,8 +418,9 @@ async fn process_single_task(
     Ok(())
 }
 
-async fn execute_download(
+async fn execute_download_with_quality(
     task: &DownloadEntry,
+    quality: lux_core::types::Quality,
     client: &reqwest::Client,
     sm: &SourceManager,
 ) -> Result<PathBuf> {
@@ -406,9 +431,7 @@ async fn execute_download(
     let _ = fs::create_dir_all(&output_dir);
 
     // Resolve downloadable Stream URL
-    let quality_enum =
-        std::str::FromStr::from_str(&task.quality).unwrap_or(lux_core::types::Quality::Q320k);
-    let stream_url = sm.resolve_url(&task.source, &task.song_id, quality_enum)?;
+    let stream_url = sm.resolve_url(&task.source, &task.song_id, quality)?;
 
     // Determine target extension
     let extension = if stream_url.contains(".flac") {
@@ -418,7 +441,7 @@ async fn execute_download(
     };
 
     // Atomically write into a .part file inside cache dir
-    let part_filename = format!("{}_{}.part", task.song_id, task.quality);
+    let part_filename = format!("{}_{}.part", task.song_id, quality.as_str());
     let part_path = paths.cache_dir.join(&part_filename);
 
     let mut file = File::options()
@@ -592,4 +615,56 @@ async fn execute_download(
     }
 
     Ok(final_path)
+}
+
+pub fn get_fallback_qualities(initial: lux_core::types::Quality) -> Vec<lux_core::types::Quality> {
+    use lux_core::types::Quality;
+    let all_qualities = [
+        Quality::Flac24bit,
+        Quality::Flac,
+        Quality::Q320k,
+        Quality::Q192k,
+        Quality::Q128k,
+    ];
+
+    let mut qualities_to_try = vec![initial];
+    if let Some(pos) = all_qualities.iter().position(|&q| q == initial) {
+        for &q in &all_qualities[pos + 1..] {
+            qualities_to_try.push(q);
+        }
+    }
+    qualities_to_try
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lux_core::types::Quality;
+
+    #[test]
+    fn test_fallback_qualities() {
+        // 1. flac24bit should try all in descending order
+        let chain_24 = get_fallback_qualities(Quality::Flac24bit);
+        assert_eq!(
+            chain_24,
+            vec![
+                Quality::Flac24bit,
+                Quality::Flac,
+                Quality::Q320k,
+                Quality::Q192k,
+                Quality::Q128k
+            ]
+        );
+
+        // 2. Q320k should start with 320k and fallback to 192k -> 128k
+        let chain_320 = get_fallback_qualities(Quality::Q320k);
+        assert_eq!(
+            chain_320,
+            vec![Quality::Q320k, Quality::Q192k, Quality::Q128k]
+        );
+
+        // 3. Q128k should only have 128k
+        let chain_128 = get_fallback_qualities(Quality::Q128k);
+        assert_eq!(chain_128, vec![Quality::Q128k]);
+    }
 }
