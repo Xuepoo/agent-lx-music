@@ -110,10 +110,10 @@ alx pic <cli_id> --save    # Download album art with magic bytes file suffix val
 ## Documentation
 
 All architectural specs, command options, and data schemas are documented in detail inside the `docs/` directory:
-- [CLI Reference Manual](docs/CLI.md) — Detailed subcommand descriptions and global flags
-- [Source Bridge API](docs/SOURCE-API.md) — JavaScript bridge execution contracts inside isolated sandboxes
-- [XDG Path Configuration](docs/CONFIG.md) — Environment variables, default directories, and resolving rules
-- [SQLite Schema Model](docs/DATA-MODEL.md) — SQLite database schema definitions and indexing topological graphs
+- [CLI Reference Manual](docs/cli.md) — Detailed subcommand descriptions and global flags
+- [Source Bridge API](docs/source-api.md) — JavaScript bridge execution contracts inside isolated sandboxes
+- [XDG Path Configuration](docs/config.md) — Environment variables, default directories, and resolving rules
+- [SQLite Schema Model](docs/data-model.md) — SQLite database schema definitions and indexing topological graphs
 
 ---
 
@@ -122,4 +122,4 @@ All architectural specs, command options, and data schemas are documented in det
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ### Disclaimer & Supplementary Agreement
-Please read our [Project Agreement & Disclaimer](docs/DISCLAIMER.md) for terms of use, third-party source guidelines, copyright compliance, and non-commercial exploration rules.
+Please read our [Project Agreement & Disclaimer](docs/disclaimer.md) for terms of use, third-party source guidelines, copyright compliance, and non-commercial exploration rules.
