@@ -102,6 +102,7 @@ alx source remove <id>                # Remove source
 alx source update <id>                # Update from remote URL
 alx source test <id>                  # Health check (init/search/url)
 alx source info <id>                  # Detailed source info
+alx source health                     # Show source health & circuit breaker metrics
 ```
 
 ### Board & Discover
@@ -149,11 +150,11 @@ All commands support `--json` for structured output. Example search result:
   {
     "cli_id": "04164d6d",
     "song_id": "228908",
-    "name": "晴天",
-    "singer": "周杰伦",
+    "name": "Sunny Day",
+    "singer": "Jay Chou",
     "source": "kw",
     "interval": "04:29",
-    "album_name": "叶惠美",
+    "album_name": "Ye Hui Mei",
     "pic_url": "https://img3.kuwo.cn/..."
   }
 ]
