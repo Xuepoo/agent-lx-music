@@ -25,8 +25,6 @@ pub fn parse_m3u(content: &str) -> Vec<ImportedTrack> {
 
     for line in lines {
         if line.starts_with("#EXTINF:") {
-            // e.g., #EXTINF:269,周杰伦 - 晴天
-            // or #EXTINF:-1,Artist - Title
             if let Some(comma_idx) = line.find(',') {
                 let metadata = &line[comma_idx + 1..];
                 if let Some(track) = parse_single_line_txt(metadata) {
@@ -358,7 +356,7 @@ pub async fn resolve_imported_track(
     Ok(None)
 }
 
-fn calculate_agent_score(
+pub fn calculate_agent_score(
     candidate: &MusicInfo,
     target: &ImportedTrack,
     platform_priority: &[String],
@@ -439,65 +437,4 @@ fn calculate_agent_score(
     }
 
     score
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_playlist_parsers() {
-        // 1. M3U Parser
-        let m3u_data = "#EXTM3U\n#EXTINF:260,ArtistA - SongA\n/local/path.mp3";
-        let tracks = parse_m3u(m3u_data);
-        assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].title, "SongA");
-        assert_eq!(tracks[0].artist, "ArtistA");
-
-        // 2. CSV Parser
-        let csv_data = "Track Name,Artist Name(s),Album\nSongB,ArtistB,AlbumB";
-        let tracks = parse_csv(csv_data);
-        assert_eq!(tracks.len(), 1);
-        assert_eq!(tracks[0].title, "SongB");
-        assert_eq!(tracks[0].artist, "ArtistB");
-
-        // 3. Plain Text Parser
-        let txt_data = "ArtistC - SongC\n# Comment line\nSongD - ArtistD";
-        let tracks = parse_txt(txt_data);
-        assert_eq!(tracks.len(), 2);
-        assert_eq!(tracks[0].title, "SongC");
-        assert_eq!(tracks[0].artist, "ArtistC");
-    }
-
-    #[test]
-    fn test_scoring_weights() {
-        let candidate = MusicInfo {
-            songmid: "123".to_string(),
-            name: "晴天".to_string(),
-            singer: "周杰伦".to_string(),
-            source: Source::NetEase,
-            album_name: Some("叶惠美".to_string()),
-            album_id: None,
-            interval: None,
-            pic_url: None,
-            hash: None,
-            extra: None,
-        };
-
-        let target = ImportedTrack {
-            title: "晴天".to_string(),
-            artist: "周杰伦".to_string(),
-            album: Some("叶惠美".to_string()),
-            song_id: None,
-            source: None,
-        };
-
-        let score = calculate_agent_score(
-            &candidate,
-            &target,
-            &["wy".to_string(), "kw".to_string()],
-            None,
-        );
-        assert!(score > 80.0);
-    }
 }
