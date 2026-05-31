@@ -189,6 +189,18 @@ pub fn init_db() -> Result<()> {
         params!["Favorites", "Default Favorites Playlist", now, now],
     );
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS source_health (
+            source_id            TEXT PRIMARY KEY,
+            total_requests       INTEGER NOT NULL DEFAULT 0,
+            failed_requests      INTEGER NOT NULL DEFAULT 0,
+            consecutive_fails    INTEGER NOT NULL DEFAULT 0,
+            last_fail_at         TEXT,
+            circuit_broken_until TEXT
+        );",
+        [],
+    )?;
+
     Ok(())
 }
 
@@ -965,6 +977,115 @@ pub fn remove_from_playlist(playlist_name: &str, song_id: &str, source: &str) ->
     )?;
 
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceHealthEntry {
+    pub source_id: String,
+    pub total_requests: i64,
+    pub failed_requests: i64,
+    pub consecutive_fails: i64,
+    pub last_fail_at: Option<String>,
+    pub circuit_broken_until: Option<String>,
+}
+
+pub fn record_source_success(source_id: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    conn.execute(
+        "INSERT INTO source_health (source_id, total_requests, failed_requests, consecutive_fails, last_fail_at, circuit_broken_until)
+         VALUES (?1, 1, 0, 0, NULL, NULL)
+         ON CONFLICT(source_id) DO UPDATE SET
+            total_requests = total_requests + 1,
+            consecutive_fails = 0,
+            circuit_broken_until = NULL",
+        params![source_id],
+    )?;
+    Ok(())
+}
+
+pub fn record_source_fail(source_id: &str) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+
+    // 1. 先尝试获取旧的 consecutive_fails
+    let current_fails: i64 = conn
+        .query_row(
+            "SELECT consecutive_fails FROM source_health WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let new_fails = current_fails + 1;
+    let broken_until = if new_fails >= 3 {
+        // 熔断开启 5 分钟 (300秒)
+        let until = chrono::Local::now() + chrono::Duration::seconds(300);
+        Some(until.to_rfc3339())
+    } else {
+        None
+    };
+
+    conn.execute(
+        "INSERT INTO source_health (source_id, total_requests, failed_requests, consecutive_fails, last_fail_at, circuit_broken_until)
+         VALUES (?1, 1, 1, 1, ?2, ?3)
+         ON CONFLICT(source_id) DO UPDATE SET
+            total_requests = total_requests + 1,
+            failed_requests = failed_requests + 1,
+            consecutive_fails = consecutive_fails + 1,
+            last_fail_at = ?2,
+            circuit_broken_until = ?3",
+        params![source_id, now, broken_until],
+    )?;
+    Ok(())
+}
+
+pub fn get_source_circuit_broken_until(source_id: &str) -> Result<Option<String>> {
+    let conn = get_db_conn()?;
+    let mut stmt =
+        conn.prepare("SELECT circuit_broken_until FROM source_health WHERE source_id = ?1")?;
+    let mut rows = stmt.query(params![source_id])?;
+    if let Some(row) = rows.next()? {
+        let val: Option<String> = row.get(0)?;
+        if let Some(until_time) = val
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        {
+            let now = chrono::Local::now();
+            if now < until_time {
+                return Ok(val);
+            } else {
+                // Cooldown completed, reset state
+                let _ = conn.execute(
+                    "UPDATE source_health SET consecutive_fails = 0, circuit_broken_until = NULL WHERE source_id = ?1",
+                    params![source_id],
+                );
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn list_sources_health() -> Result<Vec<SourceHealthEntry>> {
+    let conn = get_db_conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT source_id, total_requests, failed_requests, consecutive_fails, last_fail_at, circuit_broken_until
+         FROM source_health",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(SourceHealthEntry {
+            source_id: row.get(0)?,
+            total_requests: row.get(1)?,
+            failed_requests: row.get(2)?,
+            consecutive_fails: row.get(3)?,
+            last_fail_at: row.get(4)?,
+            circuit_broken_until: row.get(5)?,
+        })
+    })?;
+    let mut res = Vec::new();
+    for r in rows {
+        res.push(r?);
+    }
+    Ok(res)
 }
 
 #[cfg(test)]

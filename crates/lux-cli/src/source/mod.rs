@@ -70,6 +70,19 @@ impl SourceManager {
                     continue;
                 }
 
+                // Circuit Breaker check
+                if let Ok(Some(broken_until)) =
+                    crate::library::db::get_source_circuit_broken_until(&entry.id)
+                {
+                    lux_core::log_verbose!(
+                        "Source '{}' (id: {}) is currently circuit-broken until {}. Skipping.",
+                        entry.name,
+                        entry.id,
+                        broken_until
+                    );
+                    continue;
+                }
+
                 let platforms: Vec<String> =
                     serde_json::from_str(&entry.platforms).unwrap_or_default();
                 if !platforms.contains(&platform.to_string()) {
@@ -82,6 +95,7 @@ impl SourceManager {
                     entry.script_path
                 );
                 let Ok(script) = std::fs::read_to_string(&entry.script_path) else {
+                    let _ = crate::library::db::record_source_fail(&entry.id);
                     continue;
                 };
                 if let Ok(sandbox) = runtime::JsSandbox::new() {
@@ -101,6 +115,7 @@ impl SourceManager {
                     ) {
                         Ok(url) => {
                             if validate_url(&url) {
+                                let _ = crate::library::db::record_source_success(&entry.id);
                                 lux_core::log_verbose!(
                                     "JS resolver in '{}' successfully resolved valid URL: {}",
                                     entry.name,
@@ -108,6 +123,7 @@ impl SourceManager {
                                 );
                                 return Some(url);
                             } else {
+                                let _ = crate::library::db::record_source_fail(&entry.id);
                                 lux_core::log_verbose!(
                                     "JS resolver in '{}' returned invalid/blocked URL: {}",
                                     entry.name,
@@ -116,6 +132,7 @@ impl SourceManager {
                             }
                         }
                         Err(e) => {
+                            let _ = crate::library::db::record_source_fail(&entry.id);
                             lux_core::log_verbose!(
                                 "JS resolver in '{}' execution failed: {:?}",
                                 entry.name,
@@ -123,6 +140,8 @@ impl SourceManager {
                             );
                         }
                     }
+                } else {
+                    let _ = crate::library::db::record_source_fail(&entry.id);
                 }
             }
             lux_core::log_verbose!(
