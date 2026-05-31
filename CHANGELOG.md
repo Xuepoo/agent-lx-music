@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.2] - 2026-05-31
+
+### Added
+- **Source Health Diagnostics & Circuit Breaker**: Added a new local SQLite metadata table `source_health` to log request successes and failures for custom JavaScript sources. Failing resolver scripts are dynamically circuit-broken after 3 consecutive failures (cooling down for 5 minutes) to protect backend scraper performance.
+- **Health Diagnostics CLI Subcommand**: Implemented `alx source health` subcommand to display a beautiful diagnostic dashboard of custom source metrics (Total Requests, Failures, Error Rate, and status tags with vibrant styling). Supports `--json` mapping outputs.
+- **Integration Tests Refactoring**: Migrated unit tests from `src/library/playlist_parser.rs` to a dedicated integration tests file `crates/lux-cli/tests/playlist_parser_test.rs`. Cleaned up all Chinese test strings and replaced them with standard English songs ("Sunny Day", "Jay Chou") to ensure internationalized data compliance.
+
+### Fixed
+- **SQLite Lock Contention Mitigation**: Refactored the core downloader database progress loop in `download.rs`. Introduced a 250ms & 2.5% progression-based throttle guard to eliminate SQLite `database is locked` error contentions during concurrent search and download daemon operations.
+- **Atomic File Placements**: Guaranteed absolute filesystem placement atomicity by storing stream data into temporary `.part` files, flushing them via `sync_all()`, and executing atomic `rename` replacements.
+- **Unicode Filename Sanitizer**: Implemented robust path character normalization in `sanitize_filename` (cleaning controls, emojis, and trim formatting while enforcing a strict 180 characters limit) to resolve filesystem writing issues across different host partitions.
+
+---
+
 ## [0.3.1] - 2026-05-31
 
 ### Added
@@ -74,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Initial Release**: Core terminal-native music command-line interface `alx` providing offline local indexing, beets integration, and dynamic script source integration.
 
+[0.3.2]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Xuepoo/agent-lx-music/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/Xuepoo/agent-lx-music/compare/v0.2.4...v0.2.5
