@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.4] - 2026-06-11
+
+### Fixed
+- **Playback State Synchronization**: Implemented a real-time state synchronization mechanism using an embedded mpv Lua script. This ensures `current.json` and `queue.json` are immediately updated when songs change, volume is adjusted, or playback is paused/resumed, even when the CLI is not running.
+- **Multi-File Playback**: Fixed a bug where `alx play` would only handle the first file or URL provided. Now multiple arguments are correctly queued in mpv and reflected in the local `queue.json`.
+- **Unified State Schema**: Unified the data schema for player state tracking, resolving issues where `alx now` and other commands would occasionally fail to display song metadata correctly.
+- **Lyric/Cover Extraction**: Updated `alx lyric` and `alx pic` commands to support the new unified state schema when retrieving metadata for the currently playing song.
+- **Configuration Consistency**: Removed hardcoded volume defaults; the player now strictly respects the `default_volume` setting in the user's configuration file.
+
+---
+
 ## [0.3.3] - 2026-05-31
 
 ### Fixed

@@ -56,7 +56,15 @@ pub async fn run(id: Option<String>, save: bool, output: Option<String>, json: b
         let current_json_path = paths.cache_dir.join("current.json");
         let song_opt: Option<SearchCacheEntry> = if current_json_path.exists() {
             if let Ok(content) = fs::read_to_string(&current_json_path) {
-                serde_json::from_str(&content).ok()
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(song_val) = val.get("song") {
+                        serde_json::from_value::<SearchCacheEntry>(song_val.clone()).ok()
+                    } else {
+                        serde_json::from_value::<SearchCacheEntry>(val).ok()
+                    }
+                } else {
+                    None
+                }
             } else {
                 None
             }

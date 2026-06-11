@@ -5,6 +5,7 @@ use crate::source::SourceManager;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 use lux_core::types::Quality;
+use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -71,8 +72,6 @@ pub async fn run(
         }
         let first_url = mgr.resolve_url(&first_song.source, &first_song.song_id, quality)?;
         client.play_file_or_url(&first_url)?;
-        save_currently_playing(first_song)?;
-        let _ = add_to_history(first_song, None);
 
         let mut added_songs = vec![first_song.clone()];
 
@@ -88,6 +87,10 @@ pub async fn run(
             current_index: Some(0),
         };
         crate::cmd::queue::save_queue(&updated_queue)?;
+
+        // State will be synced by mpv Lua script after load
+        save_currently_playing(first_song)?;
+        let _ = add_to_history(first_song, None);
 
         if json {
             println!(
@@ -118,49 +121,43 @@ pub async fn run(
             if current_json_path.exists() {
                 if let Ok(content) = fs::read_to_string(&current_json_path) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(song_val) = val.get("song") {
-                            if let Ok(song) =
-                                serde_json::from_value::<SearchCacheEntry>(song_val.clone())
-                            {
-                                let last_pos = val
-                                    .get("last_position")
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.0);
-                                let volume = val
-                                    .get("volume")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|v| v as u8)
-                                    .unwrap_or(config.player.default_volume);
+                        // Support both PlaybackState (new) and SearchCacheEntry (old)
+                        let (song, last_pos, volume) = if val.get("song").is_some() {
+                            let state: crate::library::db::PlaybackState =
+                                serde_json::from_value(val.clone())?;
+                            (state.song, state.last_position, state.volume)
+                        } else {
+                            let entry: SearchCacheEntry = serde_json::from_value(val.clone())?;
+                            (entry, 0.0, config.player.default_volume)
+                        };
 
-                                let resolved_url = if song.source == "local" {
-                                    song.extra.clone().unwrap_or_default()
-                                } else {
-                                    mgr.resolve_url(
-                                        &song.source,
-                                        &song.song_id,
-                                        config.source.default_quality,
-                                    )?
-                                };
+                        let resolved_url = if song.source == "local" {
+                            song.extra.clone().unwrap_or_default()
+                        } else {
+                            mgr.resolve_url(
+                                &song.source,
+                                &song.song_id,
+                                config.source.default_quality,
+                            )?
+                        };
 
-                                if !resolved_url.is_empty() {
-                                    if !json {
-                                        println!(
-                                            "{} Resuming playback: {} — {} (at {:.1}s)...",
-                                            "▶".green().bold(),
-                                            song.name.bold(),
-                                            song.singer.cyan(),
-                                            last_pos
-                                        );
-                                    }
-                                    client.play_file_or_url(&resolved_url)?;
-                                    client.set_volume(volume)?;
-                                    if last_pos > 0.0 {
-                                        std::thread::sleep(Duration::from_millis(300));
-                                        let _ = client.seek(&last_pos.to_string());
-                                    }
-                                    return Ok(());
-                                }
+                        if !resolved_url.is_empty() {
+                            if !json {
+                                println!(
+                                    "{} Resuming playback: {} — {} (at {:.1}s)...",
+                                    "▶".green().bold(),
+                                    song.name.bold(),
+                                    song.singer.cyan(),
+                                    last_pos
+                                );
                             }
+                            client.play_file_or_url(&resolved_url)?;
+                            client.set_volume(volume)?;
+                            if last_pos > 0.0 {
+                                std::thread::sleep(Duration::from_millis(300));
+                                let _ = client.seek(&last_pos.to_string());
+                            }
+                            return Ok(());
                         }
                     }
                 }
@@ -186,49 +183,80 @@ pub async fn run(
         || first.ends_with(".wav");
 
     if is_url || expanded_path.exists() {
-        let play_target = if is_url {
-            first.clone()
-        } else {
-            expanded_path.to_string_lossy().to_string()
-        };
-        client.play_file_or_url(&play_target)?;
+        // Clear playlist first
+        let _ = crate::player::ipc::send_mpv_command(
+            &client.socket_path,
+            vec![serde_json::json!("playlist-clear")],
+        );
 
-        let filename = Path::new(&play_target)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&play_target);
+        let mut added_songs = Vec::new();
 
-        let entry = SearchCacheEntry {
-            cli_id: "direct".to_string(),
-            song_id: "direct".to_string(),
-            name: filename.to_string(),
-            singer: "Direct Link / Local File".to_string(),
-            source: "local".to_string(),
-            interval: None,
-            album_name: None,
-            album_id: None,
-            pic_url: None,
-            songmid: None,
-            hash: None,
-            extra: Some(play_target.clone()),
-        };
+        for (idx, target) in id_or_urls.iter().enumerate() {
+            let is_u = target.starts_with("http://") || target.starts_with("https://");
+            let exp_p = lux_core::config::expand_path(target);
 
-        save_currently_playing(&entry)?;
+            if is_u || exp_p.exists() {
+                let play_target = if is_u {
+                    target.clone()
+                } else {
+                    exp_p.to_string_lossy().to_string()
+                };
 
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "playing",
-                    "file": play_target
-                })
-            );
-        } else {
-            println!(
-                "{} Playing direct link/file: {}",
-                "▶".green().bold(),
-                play_target.cyan()
-            );
+                if idx == 0 {
+                    client.play_file_or_url(&play_target)?;
+                } else {
+                    client.append_file_or_url(&play_target)?;
+                }
+
+                let filename = Path::new(&play_target)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&play_target);
+
+                let entry = SearchCacheEntry {
+                    cli_id: "direct".to_string(),
+                    song_id: "direct".to_string(),
+                    name: filename.to_string(),
+                    singer: "Direct Link / Local File".to_string(),
+                    source: "local".to_string(),
+                    interval: None,
+                    album_name: None,
+                    album_id: None,
+                    pic_url: None,
+                    songmid: None,
+                    hash: None,
+                    extra: Some(play_target.clone()),
+                };
+                added_songs.push(entry);
+            }
+        }
+
+        if let Some(first_entry) = added_songs.first() {
+            save_currently_playing(first_entry)?;
+
+            let updated_queue = crate::cmd::queue::PlayQueue {
+                songs: added_songs.clone(),
+                current_index: Some(0),
+            };
+            crate::cmd::queue::save_queue(&updated_queue)?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "playing",
+                        "count": added_songs.len(),
+                        "first": first_entry.name
+                    })
+                );
+            } else {
+                println!(
+                    "{} Playing {} direct items. Current: {}",
+                    "▶".green().bold(),
+                    added_songs.len(),
+                    first_entry.name.cyan()
+                );
+            }
         }
         return Ok(());
     } else if is_path_like {
@@ -255,10 +283,8 @@ pub async fn run(
     }
 
     // Clear queue
-    let _ = crate::player::ipc::send_mpv_command(
-        &client.socket_path,
-        vec![serde_json::json!("playlist-clear")],
-    );
+    let _ =
+        crate::player::ipc::send_mpv_command(&client.socket_path, vec![json!("playlist-clear")]);
 
     let first_song = &songs[0];
     if !json {
@@ -271,8 +297,6 @@ pub async fn run(
 
     let first_url = mgr.resolve_url(&first_song.source, &first_song.song_id, quality)?;
     client.play_file_or_url(&first_url)?;
-    save_currently_playing(first_song)?;
-    let _ = add_to_history(first_song, None);
 
     let mut added_songs = vec![first_song.clone()];
 
@@ -288,6 +312,10 @@ pub async fn run(
         current_index: Some(0),
     };
     crate::cmd::queue::save_queue(&updated_queue)?;
+
+    // State will be synced by mpv Lua script after load
+    save_currently_playing(first_song)?;
+    let _ = add_to_history(first_song, None);
 
     if json {
         println!(
@@ -325,12 +353,21 @@ pub async fn run(
 }
 
 fn save_currently_playing(entry: &SearchCacheEntry) -> Result<()> {
+    let config = lux_core::config::Config::load().unwrap_or_default();
     let paths = lux_core::config::resolve_paths();
     let current_json_path = paths.cache_dir.join("current.json");
     if let Some(parent) = current_json_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let serialized = serde_json::to_string(&entry)?;
+
+    let state = crate::library::db::PlaybackState {
+        song: entry.clone(),
+        last_position: 0.0,
+        volume: config.player.default_volume,
+        updated_at: chrono::Local::now().to_rfc3339(),
+    };
+
+    let serialized = serde_json::to_string(&state)?;
     fs::write(current_json_path, serialized)?;
     Ok(())
 }

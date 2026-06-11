@@ -16,14 +16,86 @@ pub struct MpvClient {
 
 impl Default for MpvClient {
     fn default() -> Self {
+        let config = lux_core::config::Config::load().unwrap_or_default();
         let paths = lux_core::config::resolve_paths();
         let socket_path = paths.cache_dir.join("mpv.sock");
         Self {
             socket_path,
-            default_volume: 80,
+            default_volume: config.player.default_volume,
         }
     }
 }
+
+const SYNC_LUA: &str = r#"
+local utils = require 'mp.utils'
+
+local function get_cache_dir()
+    local home = os.getenv("HOME")
+    if not home then return "/tmp" end
+    return home .. "/.cache/agent-lx-music"
+end
+
+local function update_state()
+    print("Lua: update_state triggered")
+    local pos = mp.get_property_number("time-pos", 0)
+    local vol = mp.get_property_number("volume", 100)
+    local paused = mp.get_property_bool("pause", false)
+    local index = mp.get_property_number("playlist-playing-pos", 0)
+    
+    local cache_dir = get_cache_dir()
+    local queue_path = cache_dir .. "/queue.json"
+    local current_path = cache_dir .. "/current.json"
+    
+    local f = io.open(queue_path, "r")
+    if not f then 
+        print("Lua: queue.json not found at " .. queue_path)
+        return 
+    end
+    local content = f:read("*all")
+    f:close()
+    
+    local queue = utils.parse_json(content)
+    if not queue or not queue.songs then 
+        print("Lua: Failed to parse queue.json")
+        return 
+    end
+    
+    if queue.current_index ~= index then
+        print("Lua: Updating queue index to " .. index)
+        queue.current_index = index
+        local fq = io.open(queue_path, "w")
+        if fq then
+            fq:write(utils.format_json(queue))
+            fq:close()
+        end
+    end
+    
+    local song = queue.songs[index + 1]
+    if song then
+        print("Lua: Updating current.json for song " .. song.name)
+        local state = {
+            song = song,
+            last_position = pos,
+            volume = math.floor(vol),
+            updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }
+        local fc = io.open(current_path, "w")
+        if fc then
+            fc:write(utils.format_json(state))
+            fc:close()
+        end
+    else
+        print("Lua: No song found in queue at index " .. index)
+    end
+end
+
+mp.observe_property("playlist-playing-pos", "number", update_state)
+mp.observe_property("pause", "bool", update_state)
+mp.register_event("file-loaded", update_state)
+
+-- Periodically sync position
+mp.add_periodic_timer(5, update_state)
+"#;
 
 #[cfg(unix)]
 impl MpvClient {
@@ -51,6 +123,13 @@ impl MpvClient {
             let _ = fs::create_dir_all(parent);
         }
 
+        // Deploy sync Lua script
+        let paths = lux_core::config::resolve_paths();
+        let scripts_dir = paths.cache_dir.join("scripts");
+        let _ = fs::create_dir_all(&scripts_dir);
+        let sync_script_path = scripts_dir.join("sync.lua");
+        let _ = fs::write(&sync_script_path, SYNC_LUA);
+
         // Spawn mpv background process
         let volume_arg = format!("--volume={}", self.default_volume);
         let ipc_arg = format!("--input-ipc-server={}", self.socket_path.display());
@@ -60,6 +139,7 @@ impl MpvClient {
             .arg("--idle")
             .arg("--no-video")
             .arg("--vo=null")
+            .arg(format!("--script={}", sync_script_path.display()))
             .arg(&ipc_arg)
             .arg(&volume_arg);
 
@@ -111,8 +191,6 @@ impl MpvClient {
         for _ in 0..20 {
             thread::sleep(Duration::from_millis(50));
             if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
-                // Spawn background playback position ticker
-                Self::trigger_playback_ticker(self.socket_path.clone());
                 return Ok(());
             }
             // Check if process exited early
@@ -122,100 +200,6 @@ impl MpvClient {
         }
 
         Err(anyhow!("Timeout waiting for mpv IPC socket to be created"))
-    }
-
-    fn trigger_playback_ticker(socket_path: PathBuf) {
-        static LAUNCHED_TICKER: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !LAUNCHED_TICKER.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(Duration::from_secs(5));
-                    let client = MpvClient {
-                        socket_path: socket_path.clone(),
-                        default_volume: 80,
-                    };
-                    if let Ok(Some((_path, pos, _duration, vol, paused))) =
-                        client.get_playback_status()
-                    {
-                        if !paused && pos > 0.0 {
-                            let _ = Self::update_current_playing_position(pos, vol);
-                        }
-                        if let Ok(Some(new_idx)) = client.get_playing_index() {
-                            let _ = Self::sync_queue_playing_index(new_idx);
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    fn update_current_playing_position(pos: f64, vol: u8) -> Result<()> {
-        let paths = lux_core::config::resolve_paths();
-        let current_json_path = paths.cache_dir.join("current.json");
-        if current_json_path.exists() {
-            if let Ok(content) = fs::read_to_string(&current_json_path) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let song = if val.get("song").is_some() {
-                        val.get("song").cloned().unwrap()
-                    } else {
-                        val.clone()
-                    };
-
-                    let new_state = serde_json::json!({
-                        "song": song,
-                        "last_position": pos,
-                        "volume": vol,
-                        "updated_at": chrono::Local::now().to_rfc3339()
-                    });
-
-                    let serialized = serde_json::to_string(&new_state)?;
-                    let _ = fs::write(current_json_path, serialized);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn sync_queue_playing_index(new_idx: usize) -> Result<()> {
-        let paths = lux_core::config::resolve_paths();
-        let queue_json_path = paths.cache_dir.join("queue.json");
-        if !queue_json_path.exists() {
-            return Ok(());
-        }
-
-        let content = fs::read_to_string(&queue_json_path)?;
-        #[derive(serde::Serialize, serde::Deserialize)]
-        struct LocalPlayQueue {
-            songs: Vec<crate::library::db::SearchCacheEntry>,
-            current_index: Option<usize>,
-        }
-
-        let mut queue: LocalPlayQueue = serde_json::from_str(&content)?;
-        if queue.current_index != Some(new_idx) {
-            queue.current_index = Some(new_idx);
-
-            if new_idx < queue.songs.len() {
-                let song = &queue.songs[new_idx];
-
-                // 1. Save to current.json
-                let current_json_path = paths.cache_dir.join("current.json");
-                let new_state = serde_json::json!({
-                    "song": song,
-                    "last_position": 0.0,
-                    "volume": 80,
-                    "updated_at": chrono::Local::now().to_rfc3339()
-                });
-                let _ = fs::write(current_json_path, serde_json::to_string(&new_state)?);
-
-                // 2. Add to history
-                let _ = crate::library::db::add_to_history(song, None);
-            }
-
-            let serialized = serde_json::to_string(&queue)?;
-            fs::write(queue_json_path, serialized)?;
-        }
-        Ok(())
     }
 
     pub fn play_file_or_url(&self, path_or_url: &str) -> Result<()> {
@@ -275,7 +259,7 @@ impl MpvClient {
             &self.socket_path,
             vec![json!("get_property"), json!("volume")],
         )?;
-        let vol = val.as_f64().unwrap_or(80.0) as u8;
+        let vol = val.as_f64().unwrap_or(self.default_volume as f64) as u8;
         Ok(vol)
     }
 
@@ -439,7 +423,7 @@ impl MpvClient {
         )
         .ok()
         .and_then(|v| v.as_f64())
-        .unwrap_or(80.0) as u8;
+        .unwrap_or(self.default_volume as f64) as u8;
 
         let paused = ipc::send_mpv_command(
             &self.socket_path,
