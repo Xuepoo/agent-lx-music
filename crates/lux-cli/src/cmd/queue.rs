@@ -163,7 +163,7 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
                     let new_state = serde_json::json!({
                         "song": first_song,
                         "last_position": 0.0,
-                        "volume": 80,
+                        "volume": config.player.default_volume,
                         "updated_at": chrono::Local::now().to_rfc3339()
                     });
                     let _ = fs::write(current_json_path, serde_json::to_string(&new_state)?);

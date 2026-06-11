@@ -554,6 +554,14 @@ pub struct SearchCacheEntry {
     pub extra: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackState {
+    pub song: SearchCacheEntry,
+    pub last_position: f64,
+    pub volume: u8,
+    pub updated_at: String,
+}
+
 pub fn insert_search_cache(entry: &SearchCacheEntry) -> Result<()> {
     let conn = get_db_conn()?;
     let now = chrono::Local::now().to_rfc3339();
