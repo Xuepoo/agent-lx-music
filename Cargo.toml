@@ -20,10 +20,10 @@ readme = "README.md"
 # Core
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
-thiserror = "2.0.11"
+thiserror = "2.0.19"
 toml = "1.1.2"
 dirs = "6.0.0"
-async-trait = "0.1.86"
+async-trait = "0.1.91"
 
 # Network & Async
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "process", "net", "io-util", "time", "sync"] }
