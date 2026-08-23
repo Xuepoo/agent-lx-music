@@ -118,19 +118,26 @@ pub fn parse_search_directives(keyword: &str) -> SearchDirectives {
     }
 }
 
+/// Shared search pipeline: fan out to native and JS sources, dedupe across
+/// platforms, rank by relevance, and cache results in SQLite.
+///
+/// Used by `alx search` (which renders the table/JSON output) and the MCP
+/// `search` tool (which serializes the entries directly). Time complexity:
+/// O(S·L + N log N) for S sources × L results gathered, then sorting the
+/// N merged candidates; space O(N).
 #[allow(
     clippy::collapsible_if,
     clippy::manual_map,
     clippy::manual_range_contains
 )]
-pub async fn run(
-    keyword: String,
-    source_str: String,
+pub async fn search_songs(
+    keyword: &str,
+    source_str: &str,
     page: usize,
     limit: usize,
-    id_only: bool,
-    json: bool,
-) -> Result<()> {
+) -> Result<Vec<SearchCacheEntry>> {
+    let keyword = keyword.to_string();
+    let source_str = source_str.to_string();
     let directives = parse_search_directives(&keyword);
     let mut search_terms = Vec::new();
     if !directives.query.is_empty() {
@@ -534,6 +541,26 @@ pub async fn run(
         let _ = insert_search_cache(&entry);
         cache_entries.push(entry);
     }
+
+    Ok(cache_entries)
+}
+
+/// CLI entry point: run the shared pipeline, then render human/table or
+/// machine output.
+#[allow(
+    clippy::collapsible_if,
+    clippy::manual_map,
+    clippy::manual_range_contains
+)]
+pub async fn run(
+    keyword: String,
+    source_str: String,
+    page: usize,
+    limit: usize,
+    id_only: bool,
+    json: bool,
+) -> Result<()> {
+    let cache_entries = search_songs(&keyword, &source_str, page, limit).await?;
 
     // 5. Present outputs
     if id_only {

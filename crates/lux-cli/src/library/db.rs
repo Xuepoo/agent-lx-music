@@ -1201,14 +1201,16 @@ pub fn list_sources_health() -> Result<Vec<SourceHealthEntry>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::env;
     use std::path::PathBuf;
     use std::sync::Mutex;
 
     // All DB tests share the process-wide ALX_HOME env var; serialize them.
-    static DB_TEST_MUTEX: Mutex<()> = Mutex::new(());
+    // pub(crate) so other env-sandboxed suites (cmd::mcp) share the lock —
+    // ALX_HOME is process-global and two independent mutexes would race.
+    pub(crate) static DB_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     fn sandbox_home(name: &str) -> PathBuf {
         let dir = env::temp_dir().join(name);

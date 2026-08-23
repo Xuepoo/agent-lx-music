@@ -91,6 +91,101 @@ pub(crate) fn atomic_write(path: &std::path::Path, contents: &str) -> Result<()>
     }
 }
 
+/// Pure queue-state transition: drop `idx` and adjust `current_index` so it
+/// keeps pointing at the same song (shifting when entries slide left, or
+/// clamping to the last entry when the tail was removed).
+///
+/// Shared by `alx queue remove` and the MCP `queue_remove` tool.
+/// Time/space complexity: O(n) / O(n) for the new queue copy.
+pub(crate) fn queue_after_removal(queue: &PlayQueue, idx: usize) -> PlayQueue {
+    let mut songs = queue.songs.clone();
+    songs.remove(idx);
+
+    let mut new_current = queue.current_index;
+    if let Some(curr) = queue.current_index {
+        if curr >= songs.len() {
+            new_current = if songs.is_empty() {
+                None
+            } else {
+                Some(songs.len() - 1)
+            };
+        } else if curr > idx {
+            new_current = Some(curr - 1);
+        }
+    }
+
+    PlayQueue {
+        songs,
+        current_index: new_current,
+    }
+}
+
+/// Append cached songs to the end of the play queue by CLI ID, driving mpv
+/// and persisting the queue/current/history state. Autoplays the first
+/// track when the queue was empty.
+///
+/// Shared by `alx queue add` and the MCP `queue_add` tool; output stays
+/// with the callers. Returns how many songs were appended.
+/// Time/space complexity: O(k) URL resolutions for k IDs / O(n + k).
+pub fn queue_append_ids(ids: &[String]) -> Result<usize> {
+    // A corrupt queue file is fatal and read-only; never fall back to an
+    // empty queue that would then be persisted over the damaged original.
+    let queue = load_or_init_queue()?;
+    let client = MpvClient::new();
+    let mgr = SourceManager::new();
+    let config = lux_core::config::Config::load().unwrap_or_default();
+
+    let mut added_songs = Vec::new();
+    for id in ids {
+        let song = db::get_song_by_cli_id(id)?
+            .ok_or_else(|| anyhow!("Song ID '{}' not found in search cache. Search first.", id))?;
+
+        let url = mgr.resolve_url(&song.source, &song.song_id, config.source.default_quality)?;
+
+        // Append song to mpv
+        let _ = client.append_file_or_url(&url)?;
+
+        added_songs.push(song);
+    }
+    // Sync with local queue structure
+    let mut songs = queue.songs;
+    songs.extend(added_songs.clone());
+
+    let mut current_idx = queue.current_index;
+    if current_idx.is_none() && !songs.is_empty() {
+        current_idx = Some(0);
+        // Trigger play if queue was empty
+        if let Some(first_song) = songs.first() {
+            let url = mgr.resolve_url(
+                &first_song.source,
+                &first_song.song_id,
+                config.source.default_quality,
+            )?;
+            let _ = client.play_file_or_url(&url)?;
+
+            // Save to current.json
+            let current_json_path = paths_to_current_json();
+            let new_state = serde_json::json!({
+                "song": first_song,
+                "last_position": 0.0,
+                "volume": config.player.default_volume,
+                "updated_at": chrono::Local::now().to_rfc3339()
+            });
+            let _ = fs::write(current_json_path, serde_json::to_string(&new_state)?);
+
+            // Add to history
+            let _ = db::add_to_history(first_song, None);
+        }
+    }
+
+    save_queue(&PlayQueue {
+        songs,
+        current_index: current_idx,
+    })?;
+
+    Ok(added_songs.len())
+}
+
 pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
     // A corrupt queue file is fatal and read-only; never fall back to an
     // empty queue that would then be persisted over the damaged original.
@@ -149,75 +244,15 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
             println!("{}", table);
         }
         QueueAction::Add { ids } => {
-            let mut added_songs = Vec::new();
-            for id in ids {
-                let song = db::get_song_by_cli_id(&id)?.ok_or_else(|| {
-                    anyhow!("Song ID '{}' not found in search cache. Search first.", id)
-                })?;
-
-                if !json_out {
-                    println!(
-                        "{} Resolving playable URL for '{}'...",
-                        "⚡".yellow().bold(),
-                        song.name.cyan()
-                    );
-                }
-
-                let url =
-                    mgr.resolve_url(&song.source, &song.song_id, config.source.default_quality)?;
-
-                // Append song to mpv
-                let _ = client.append_file_or_url(&url)?;
-
-                added_songs.push(song);
-            }
-
-            // Sync with local queue structure
-            let mut songs = queue.songs;
-            songs.extend(added_songs.clone());
-
-            let mut current_idx = queue.current_index;
-            if current_idx.is_none() && !songs.is_empty() {
-                current_idx = Some(0);
-                // Trigger play if queue was empty
-                if let Some(first_song) = songs.first() {
-                    let url = mgr.resolve_url(
-                        &first_song.source,
-                        &first_song.song_id,
-                        config.source.default_quality,
-                    )?;
-                    let _ = client.play_file_or_url(&url)?;
-
-                    // Save to current.json
-                    let current_json_path = paths_to_current_json();
-                    let new_state = serde_json::json!({
-                        "song": first_song,
-                        "last_position": 0.0,
-                        "volume": config.player.default_volume,
-                        "updated_at": chrono::Local::now().to_rfc3339()
-                    });
-                    let _ = fs::write(current_json_path, serde_json::to_string(&new_state)?);
-
-                    // Add to history
-                    let _ = db::add_to_history(first_song, None);
-                }
-            }
-
-            let updated_queue = PlayQueue {
-                songs,
-                current_index: current_idx,
-            };
-            save_queue(&updated_queue)?;
+            let count = queue_append_ids(&ids)?;
 
             if json_out {
                 println!(
                     "{}",
-                    serde_json::json!({ "status": "added", "count": added_songs.len() })
+                    serde_json::json!({ "status": "added", "count": count })
                 );
             } else {
-                for s in added_songs {
-                    println!("✓ Added \"{} - {}\" to queue.", s.singer, s.name);
-                }
+                println!("✓ Added {count} songs to the queue.");
             }
         }
         QueueAction::Insert { ids } => {
@@ -316,26 +351,8 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
                 vec![json!("playlist-remove"), json!(idx)],
             );
 
-            let mut songs = queue.songs;
-            let removed = songs.remove(idx);
-
-            let mut new_current = queue.current_index;
-            if let Some(curr) = queue.current_index {
-                if curr >= songs.len() {
-                    new_current = if songs.is_empty() {
-                        None
-                    } else {
-                        Some(songs.len() - 1)
-                    };
-                } else if curr > idx {
-                    new_current = Some(curr - 1);
-                }
-            }
-
-            let updated_queue = PlayQueue {
-                songs,
-                current_index: new_current,
-            };
+            let removed = queue.songs[idx].clone();
+            let updated_queue = queue_after_removal(&queue, idx);
             save_queue(&updated_queue)?;
 
             if json_out {

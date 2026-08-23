@@ -30,10 +30,14 @@ async fn main() {
     let paths = lux_core::config::resolve_paths();
     let is_first_run = !paths.config_file.exists();
 
+    // The MCP server owns stdout for protocol frames; nothing else may
+    // write there, including the first-run banner.
+    let is_mcp = matches!(args.command, cli::Commands::Mcp);
+
     // Dispatch subcommand execution
-    match cmd::dispatch(args.command, args.json).await {
+    match cmd::dispatch(args.command, args.json, args.quiet).await {
         Ok(_) => {
-            if is_first_run && !args.quiet && !args.json {
+            if is_first_run && !args.quiet && !args.json && !is_mcp {
                 println!(
                     "\n{} {}!",
                     "✓".green().bold(),
