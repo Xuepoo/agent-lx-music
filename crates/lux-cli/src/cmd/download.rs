@@ -478,6 +478,59 @@ async fn process_single_task(
     Ok(())
 }
 
+/// Action to take on a download-stream response after a resume request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangeResponseAction {
+    /// Status is acceptable; keep streaming from the current offset.
+    Proceed,
+    /// Server ignored the Range header (200 for a ranged request); the
+    /// .part must be truncated and the stream restarted from byte 0.
+    RestartFromScratch,
+}
+
+/// Pure decision for a stream-response status given whether a Range header
+/// was sent with this request.
+///
+/// - No range sent: any 2xx proceeds, anything else fails.
+/// - Range sent: 206 Partial Content proceeds as-is, 200 OK means the server
+///   ignored the range and the full body is being replayed -> restart from
+///   scratch, anything else fails.
+fn resume_response_action(
+    status: reqwest::StatusCode,
+    range_sent: bool,
+) -> Result<RangeResponseAction> {
+    if !range_sent {
+        if !status.is_success() {
+            anyhow::bail!("Failed to start download stream: HTTP status {}", status);
+        }
+        return Ok(RangeResponseAction::Proceed);
+    }
+    match status {
+        reqwest::StatusCode::PARTIAL_CONTENT => Ok(RangeResponseAction::Proceed),
+        reqwest::StatusCode::OK => Ok(RangeResponseAction::RestartFromScratch),
+        other => anyhow::bail!("Failed to start download stream: HTTP status {}", other),
+    }
+}
+
+/// Pure length-integrity check run after the chunk loop.
+///
+/// `expected_total` combines the advertised content length with bytes
+/// already present before this request (`content_length + prior_bytes`);
+/// a value of 0 means the server advertised no length (e.g. chunked
+/// transfer) and verification is skipped. A clean mid-body connection close
+/// leaves `bytes_downloaded` short of `expected_total` and is rejected here
+/// instead of being finalized as a completed file.
+fn verify_complete_download(bytes_downloaded: u64, expected_total: u64) -> Result<()> {
+    if expected_total > 0 && bytes_downloaded != expected_total {
+        anyhow::bail!(
+            "Incomplete download: received {} of {} expected bytes (connection closed early); discarding partial file",
+            bytes_downloaded,
+            expected_total
+        );
+    }
+    Ok(())
+}
+
 async fn execute_download_with_quality(
     task: &DownloadEntry,
     quality: lux_core::types::Quality,
@@ -513,9 +566,8 @@ async fn execute_download_with_quality(
 
     let mut existing_bytes = file.metadata()?.len();
 
-    // Resumable HTTP Range requests
-    let mut request = client.get(&stream_url);
-
+    // Resumable HTTP Range requests: probe whether the server supports
+    // byte ranges before relying on resume.
     let support_range = if existing_bytes > 0 {
         if let Ok(head_res) = client.head(&stream_url).send().await {
             if let Some(accept) = head_res.headers().get(reqwest::header::ACCEPT_RANGES) {
@@ -530,23 +582,34 @@ async fn execute_download_with_quality(
         false
     };
 
-    if support_range && existing_bytes > 0 {
-        request = request.header(reqwest::header::RANGE, format!("bytes={}-", existing_bytes));
-        file.seek(SeekFrom::End(0))?;
-    } else {
-        existing_bytes = 0;
-        file.set_len(0)?;
-        file.seek(SeekFrom::Start(0))?;
-    }
+    // Send the stream request. When a Range header was sent but the server
+    // answers 200 OK instead of 206 Partial Content it ignored the range and
+    // is replaying the full body: truncate the .part and restart from
+    // scratch within this task rather than appending a duplicate payload.
+    let mut response = loop {
+        let mut request = client.get(&stream_url);
+        let range_sent = support_range && existing_bytes > 0;
+        if range_sent {
+            file.seek(SeekFrom::End(0))?;
+            request = request.header(reqwest::header::RANGE, format!("bytes={}-", existing_bytes));
+        } else {
+            existing_bytes = 0;
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+        }
 
-    let mut response = request.send().await?;
-    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-    {
-        return Err(anyhow!(
-            "Failed to start download stream: HTTP status {}",
-            response.status()
-        ));
-    }
+        let resp = request.send().await?;
+        match resume_response_action(resp.status(), range_sent)? {
+            RangeResponseAction::Proceed => break resp,
+            RangeResponseAction::RestartFromScratch => {
+                eprintln!(
+                    "↻ Server ignored Range header for '{}'; restarting download from scratch",
+                    task.name
+                );
+                existing_bytes = 0;
+            }
+        }
+    };
 
     let content_len = response.content_length().unwrap_or(0);
     let total_bytes = content_len + existing_bytes;
@@ -580,6 +643,13 @@ async fn execute_download_with_quality(
 
     file.flush()?;
     drop(file);
+
+    // Integrity: reject truncated bodies instead of finalizing them. On
+    // mismatch the .part is deleted so a retry starts from a clean slate.
+    if let Err(e) = verify_complete_download(bytes_downloaded, total_bytes) {
+        let _ = fs::remove_file(&part_path);
+        return Err(e);
+    }
 
     // Fetch Lyrics LRC
     let lyric_info = if config.download.embed_lyrics {
@@ -919,5 +989,44 @@ mod tests {
         assert!(!daemon_pid_alive(&pid_file, &proc_dir));
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_verify_complete_download_rejects_truncation() {
+        assert!(verify_complete_download(1000, 1000).is_ok());
+        // Unknown advertised length (0) skips verification.
+        assert!(verify_complete_download(0, 0).is_ok());
+        assert!(verify_complete_download(123, 0).is_ok());
+        // Clean mid-body close leaves the file short and must fail.
+        let err = verify_complete_download(640, 1024).unwrap_err();
+        assert!(err.to_string().contains("received 640 of 1024"));
+        // Oversized bodies are also a mismatch.
+        assert!(verify_complete_download(2048, 1024).is_err());
+    }
+
+    #[test]
+    fn test_resume_response_action_206_vs_200() {
+        let ok = reqwest::StatusCode::OK;
+        let partial = reqwest::StatusCode::PARTIAL_CONTENT;
+        let server_error = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+
+        // Plain request: any 2xx proceeds.
+        assert_eq!(
+            resume_response_action(ok, false).unwrap(),
+            RangeResponseAction::Proceed
+        );
+        assert!(resume_response_action(server_error, false).is_err());
+
+        // Ranged request: only 206 may proceed; 200 means the range was
+        // ignored -> restart from scratch; other statuses fail.
+        assert_eq!(
+            resume_response_action(partial, true).unwrap(),
+            RangeResponseAction::Proceed
+        );
+        assert_eq!(
+            resume_response_action(ok, true).unwrap(),
+            RangeResponseAction::RestartFromScratch
+        );
+        assert!(resume_response_action(server_error, true).is_err());
     }
 }
