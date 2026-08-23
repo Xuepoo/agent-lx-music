@@ -9,7 +9,7 @@ use id3::{Frame as Id3Frame, Tag as Id3Tag, TagLike as Id3TagLike};
 use metaflac::Tag as FlacTag;
 use metaflac::block::PictureType as FlacPictureType;
 use std::fs::{self, File};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -531,6 +531,23 @@ fn verify_complete_download(bytes_downloaded: u64, expected_total: u64) -> Resul
     Ok(())
 }
 
+/// Sniff the audio container from the leading magic bytes of a downloaded
+/// file. Recognizes FLAC (`fLaC`) and MP3 (ID3v2 `ID3` tag, or a raw MPEG
+/// audio frame sync `0xFFEx`/`0xFFFx`). Returns `None` when inconclusive so
+/// callers can apply their own fallback.
+fn detect_audio_format(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 4 && &head[..4] == b"fLaC" {
+        return Some("flac");
+    }
+    if head.len() >= 3 && &head[..3] == b"ID3" {
+        return Some("mp3");
+    }
+    if head.len() >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0 {
+        return Some("mp3");
+    }
+    None
+}
+
 async fn execute_download_with_quality(
     task: &DownloadEntry,
     quality: lux_core::types::Quality,
@@ -546,14 +563,9 @@ async fn execute_download_with_quality(
     // Resolve downloadable Stream URL
     let stream_url = sm.resolve_url(&task.source, &task.song_id, quality)?;
 
-    // Determine target extension
-    let extension = if stream_url.contains(".flac") {
-        "flac"
-    } else {
-        "mp3"
-    };
-
     // Atomically write into a .part file inside cache dir
+    // (the container extension is decided after download via magic-byte
+    // sniffing; see `detect_audio_format`).
     let part_filename = format!("{}_{}.part", task.song_id, quality.as_str());
     let part_path = paths.cache_dir.join(&part_filename);
 
@@ -650,6 +662,20 @@ async fn execute_download_with_quality(
         let _ = fs::remove_file(&part_path);
         return Err(e);
     }
+
+    // Decide the container extension from the actual file head instead of a
+    // URL substring: read the first 16 bytes of the .part and sniff magic
+    // bytes. The URL heuristic only applies when sniffing is inconclusive
+    // (e.g. exotic containers).
+    let mut head = [0u8; 16];
+    let head_len = File::open(&part_path)?.read(&mut head)?;
+    let extension = detect_audio_format(&head[..head_len]).unwrap_or_else(|| {
+        if stream_url.contains(".flac") {
+            "flac"
+        } else {
+            "mp3"
+        }
+    });
 
     // Fetch Lyrics LRC
     let lyric_info = if config.download.embed_lyrics {
@@ -1028,5 +1054,43 @@ mod tests {
             RangeResponseAction::RestartFromScratch
         );
         assert!(resume_response_action(server_error, true).is_err());
+    }
+
+    #[test]
+    fn test_detect_audio_format_flac() {
+        let mut head = vec![0x66, 0x4C, 0x61, 0x43]; // "fLaC"
+        head.extend_from_slice(&[0x00, 0x00, 0x00, 0x22]);
+        assert_eq!(detect_audio_format(&head), Some("flac"));
+    }
+
+    #[test]
+    fn test_detect_audio_format_id3() {
+        let mut head = b"ID3".to_vec();
+        head.extend_from_slice(&[0x04, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00]);
+        assert_eq!(detect_audio_format(&head), Some("mp3"));
+        // ID3 requires all three bytes; a truncated head is inconclusive.
+        assert_eq!(detect_audio_format(b"ID"), None);
+    }
+
+    #[test]
+    fn test_detect_audio_format_mpeg_frame_sync() {
+        // 0xFFFB / 0xFFE3 both match the 11-bit frame sync (0xFFEx/0xFFFx).
+        assert_eq!(detect_audio_format(&[0xFF, 0xFB, 0x90, 0x00]), Some("mp3"));
+        assert_eq!(detect_audio_format(&[0xFF, 0xE3, 0x00, 0x00]), Some("mp3"));
+        // 2-byte sync only: still detected.
+        assert_eq!(detect_audio_format(&[0xFF, 0xFA]), Some("mp3"));
+        // Non-sync leading byte or low bits clear -> inconclusive.
+        assert_eq!(detect_audio_format(&[0xFE, 0xFB]), None);
+        assert_eq!(detect_audio_format(&[0xFF, 0x00]), None);
+        assert_eq!(detect_audio_format(&[0xFF]), None);
+    }
+
+    #[test]
+    fn test_detect_audio_format_inconclusive() {
+        assert_eq!(detect_audio_format(&[]), None);
+        assert_eq!(detect_audio_format(b"RIFF....WAVEfmt "), None);
+        assert_eq!(detect_audio_format(b"<html><body>404"), None);
+        // Exactly 16 bytes are sufficient for every signature.
+        assert_eq!(detect_audio_format(&b"fLaC".to_vec()), Some("flac"));
     }
 }
