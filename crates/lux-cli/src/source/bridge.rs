@@ -17,11 +17,19 @@ use flate2::write::ZlibEncoder;
 use md5::Digest;
 use ring::rand::{SecureRandom, SystemRandom};
 use rquickjs::function::{MutFn, Rest};
-use rquickjs::{Array, ArrayBuffer, Ctx, Function, Object, Value};
+use rquickjs::{Array, ArrayBuffer, Ctx, Exception, Function, Object, Value};
+use rsa::pkcs1::DecodeRsaPublicKey;
+use rsa::pkcs8::DecodePublicKey;
+use rsa::traits::PublicKeyParts;
 use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+
+/// Maximum size accepted by `lx.utils.crypto.randomBytes`.
+const MAX_RANDOM_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum decompressed output accepted from `lx.utils.zlib.inflate`.
+const MAX_INFLATE_OUTPUT: usize = 64 * 1024 * 1024;
 
 pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result<()> {
     // Inject regenerator polyfill to support ES6+ async/await generator scripts
@@ -369,13 +377,29 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     vec![]
                 };
 
-                // Attempt Zlib decompression first, fallback to Gzip
+                // Attempt Zlib decompression first, fallback to Gzip. Both
+                // paths read at most MAX_INFLATE_OUTPUT + 1 bytes so a bomb
+                // cannot make us allocate without bound.
                 let mut decoded = Vec::new();
                 let mut decoder = ZlibDecoder::new(&bytes[..]);
-                if decoder.read_to_end(&mut decoded).is_err() {
+                let zlib_ok = decoder
+                    .by_ref()
+                    .take(MAX_INFLATE_OUTPUT as u64 + 1)
+                    .read_to_end(&mut decoded)
+                    .is_ok();
+                if !zlib_ok {
                     decoded.clear();
                     let mut gz = GzDecoder::new(&bytes[..]);
-                    let _ = gz.read_to_end(&mut decoded);
+                    let _ = gz
+                        .by_ref()
+                        .take(MAX_INFLATE_OUTPUT as u64 + 1)
+                        .read_to_end(&mut decoded);
+                }
+                if decoded.len() > MAX_INFLATE_OUTPUT {
+                    return Err(Exception::throw_range(
+                        &ctx,
+                        &format!("inflate output exceeds maximum of {MAX_INFLATE_OUTPUT} bytes"),
+                    ));
                 }
 
                 let array_buffer = ArrayBuffer::new(ctx.clone(), decoded)?;
@@ -418,22 +442,36 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
     // lx.utils.crypto
     let crypto = Object::new(ctx.clone())?;
 
-    // md5(string)
+    // md5(string | ArrayBuffer)
     let md5_fn = Function::new(
         ctx.clone(),
-        MutFn::new(move |args: Rest<Value<'js>>| -> rquickjs::Result<String> {
-            let text = if args.is_empty() {
-                String::new()
-            } else {
-                args[0]
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
-                    .unwrap_or_default()
-            };
-            let mut hasher = md5::Md5::new();
-            hasher.update(text.as_bytes());
-            Ok(hex::encode(hasher.finalize()))
-        }),
+        MutFn::new(
+            move |ctx: Ctx<'js>, args: Rest<Value<'js>>| -> rquickjs::Result<String> {
+                let bytes = if args.is_empty() {
+                    Vec::new()
+                } else if let Some(s) = args[0].as_string() {
+                    s.to_string().map_err(|e| throw_err(&ctx, e))?.into_bytes()
+                } else if let Some(obj) = args[0].as_object() {
+                    match ArrayBuffer::from_object(obj.clone()) {
+                        Some(arr_buf) => arr_buf.as_bytes().unwrap_or_default().to_vec(),
+                        None => {
+                            return Err(Exception::throw_type(
+                                &ctx,
+                                "md5 requires a string or ArrayBuffer argument",
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "md5 requires a string or ArrayBuffer argument",
+                    ));
+                };
+                let mut hasher = md5::Md5::new();
+                hasher.update(&bytes);
+                Ok(hex::encode(hasher.finalize()))
+            },
+        ),
     )?;
     crypto.set("md5", md5_fn)?;
 
@@ -447,6 +485,12 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                 } else {
                     args[0].as_int().unwrap_or(0) as usize
                 };
+                if size > MAX_RANDOM_BYTES {
+                    return Err(Exception::throw_range(
+                        &ctx,
+                        &format!("randomBytes size exceeds maximum of {MAX_RANDOM_BYTES} bytes"),
+                    ));
+                }
                 let mut bytes = vec![0u8; size];
                 let rand = SystemRandom::new();
                 let _ = rand.fill(&mut bytes);
@@ -558,29 +602,56 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     vec![]
                 };
 
-                let modulus = if public_key.starts_with("-----") {
-                    return Err(throw_err(
-                        &ctx,
-                        "PEM RSA keys not fully parsed in basic bridge yet",
-                    ));
+                if public_key.starts_with("-----BEGIN") {
+                    // Upstream lx-music-desktop contract (preload.js): PEM
+                    // public key + RSA_NO_PADDING over the input zero-left-
+                    // padded to the modulus size. Raw RSA is deterministic:
+                    // c = m^e mod n.
+                    let pub_key = RsaPublicKey::from_public_key_pem(&public_key)
+                        .or_else(|_| RsaPublicKey::from_pkcs1_pem(&public_key))
+                        .map_err(|e| {
+                            throw_err(&ctx, anyhow!("Failed to parse PEM RSA public key: {}", e))
+                        })?;
+                    let n = pub_key.n().clone();
+                    let block_size = (n.bits() + 7) / 8;
+                    if data.len() > block_size {
+                        return Err(Exception::throw_range(
+                            &ctx,
+                            &format!(
+                                "rsaEncrypt input exceeds RSA block size of {block_size} bytes"
+                            ),
+                        ));
+                    }
+                    let mut padded = vec![0u8; block_size - data.len()];
+                    padded.extend_from_slice(&data);
+                    let c = BigUint::from_bytes_be(&padded).modpow(pub_key.e(), &n);
+                    let c_bytes = c.to_bytes_be();
+                    let mut out = vec![0u8; block_size - c_bytes.len()];
+                    out.extend_from_slice(&c_bytes);
+
+                    let array_buffer = ArrayBuffer::new(ctx.clone(), out)?;
+                    Ok(array_buffer.into_value())
                 } else {
-                    BigUint::from_bytes_be(
+                    // Legacy alx path: hex-encoded modulus with e = 65537,
+                    // kept on PKCS#1 v1.5 for backwards compatibility with
+                    // existing scripts written against this bridge.
+                    let modulus = BigUint::from_bytes_be(
                         &hex::decode(public_key).map_err(|e| throw_err(&ctx, e))?,
-                    )
-                };
+                    );
 
-                let exponent = BigUint::from(65537u32);
-                let pub_key = RsaPublicKey::new(modulus, exponent).map_err(|e| {
-                    throw_err(&ctx, anyhow!("Failed to initialize RSA public key: {}", e))
-                })?;
+                    let exponent = BigUint::from(65537u32);
+                    let pub_key = RsaPublicKey::new(modulus, exponent).map_err(|e| {
+                        throw_err(&ctx, anyhow!("Failed to initialize RSA public key: {}", e))
+                    })?;
 
-                let mut rng = rand::thread_rng();
-                let encrypted = pub_key
-                    .encrypt(&mut rng, Pkcs1v15Encrypt, &data)
-                    .map_err(|e| throw_err(&ctx, anyhow!("RSA encryption failed: {}", e)))?;
+                    let mut rng = rand::thread_rng();
+                    let encrypted = pub_key
+                        .encrypt(&mut rng, Pkcs1v15Encrypt, &data)
+                        .map_err(|e| throw_err(&ctx, anyhow!("RSA encryption failed: {}", e)))?;
 
-                let array_buffer = ArrayBuffer::new(ctx.clone(), encrypted)?;
-                Ok(array_buffer.into_value())
+                    let array_buffer = ArrayBuffer::new(ctx.clone(), encrypted)?;
+                    Ok(array_buffer.into_value())
+                }
             },
         ),
     )?;
@@ -716,16 +787,19 @@ fn base64_decode(data: &str) -> Result<Vec<u8>> {
                 result.push((n & 255) as u8);
             }
             3 => {
+                // 3 chars = 18-bit value -> 2 bytes (16 bits); low 2 bits are
+                // canonical padding. byte0 = top 8 bits, byte1 = next 8 bits.
                 let n = ((alphabet[chunk[0] as usize] as u32) << 12)
                     | ((alphabet[chunk[1] as usize] as u32) << 6)
                     | (alphabet[chunk[2] as usize] as u32);
-                result.push(((n >> 8) & 255) as u8);
-                result.push((n & 255) as u8);
+                result.push(((n >> 10) & 255) as u8);
+                result.push(((n >> 2) & 255) as u8);
             }
             2 => {
+                // 2 chars = 12-bit value -> 1 byte; low 4 bits are padding.
                 let n = ((alphabet[chunk[0] as usize] as u32) << 6)
                     | (alphabet[chunk[1] as usize] as u32);
-                result.push(((n >> 2) & 255) as u8);
+                result.push(((n >> 4) & 255) as u8);
             }
             _ => {}
         }
@@ -901,3 +975,245 @@ globalThis._asyncToGenerator = function(fn) {
   };
 };
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_decode_padded_final_chunk_three_chars() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode("YWI=").unwrap(), b"ab");
+    }
+
+    #[test]
+    fn base64_decode_padded_single_byte() {
+        assert_eq!(base64_decode("YQ==").unwrap(), b"a");
+    }
+
+    #[test]
+    fn base64_decode_unpadded_input_still_works() {
+        assert_eq!(base64_decode("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(base64_decode("YQ").unwrap(), b"a");
+        assert_eq!(base64_decode("").unwrap(), b"");
+    }
+
+    #[test]
+    fn base64_encode_known_vectors_standard_alphabet() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+    }
+
+    #[test]
+    fn base64_roundtrip_random_lengths() {
+        let mut seed: u64 = 0x1234_5678_9abc_def0;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed >> 11
+        };
+        for len in 0usize..64 {
+            let buf: Vec<u8> = (0..len).map(|_| (next() & 0xff) as u8).collect();
+            let enc = base64_encode(&buf);
+            assert_eq!(
+                base64_decode(&enc).unwrap(),
+                buf,
+                "round-trip failed for len {len}"
+            );
+        }
+    }
+
+    fn hex_of(data: &[u8]) -> String {
+        data.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Evaluate a JS expression with the full `lx` bridge injected; the
+    /// expression must evaluate to a string.
+    fn eval_with_lx(script: &str) -> Result<String> {
+        let sandbox = crate::source::runtime::JsSandbox::new()?;
+        let context = sandbox.context.as_ref().unwrap();
+        context.with(|ctx| -> Result<String> {
+            inject_lx(&ctx, Arc::new(Mutex::new(SandboxState::default())))?;
+            let value: Value = match ctx.eval(script) {
+                Ok(v) => v,
+                Err(e) => {
+                    let detail = ctx
+                        .catch()
+                        .as_object()
+                        .and_then(|o| o.get::<_, String>("message").ok())
+                        .unwrap_or_else(|| "<no message>".into());
+                    return Err(anyhow!("JS eval failed: {e} ({detail})"));
+                }
+            };
+            let s = value
+                .as_string()
+                .ok_or_else(|| anyhow!("script did not return a string"))?
+                .to_string()?;
+            Ok(s)
+        })
+    }
+
+    #[test]
+    fn random_bytes_returns_requested_length() {
+        let out = eval_with_lx(
+            "(function(){ var b = lx.utils.crypto.randomBytes(1024); return 'len:' + b.byteLength; })()",
+        )
+        .unwrap();
+        assert_eq!(out, "len:1024");
+    }
+
+    #[test]
+    fn random_bytes_over_cap_throws_range_error() {
+        let out = eval_with_lx(
+            "(function(){ try { lx.utils.crypto.randomBytes(64 * 1024 * 1024 + 1); return 'no-error'; } catch (e) { return e.name + ':' + e.message; } })()",
+        )
+        .unwrap();
+        assert!(out.starts_with("RangeError:"), "got: {out}");
+        assert!(out.contains("exceeds"), "got: {out}");
+    }
+
+    #[test]
+    fn inflate_small_payload_roundtrip() {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"hello world").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let out = eval_with_lx(&format!(
+            "(function(){{ var b = lx.utils.zlib.inflate(lx.utils.buffer.from('{}', 'hex')); return lx.utils.buffer.bufToString(b); }})()",
+            hex_of(&compressed)
+        ))
+        .unwrap();
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn inflate_over_cap_errors_instead_of_unbounded_read() {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![0u8; 64 * 1024 * 1024 + 1]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let out = eval_with_lx(&format!(
+            "(function(){{ try {{ lx.utils.zlib.inflate(lx.utils.buffer.from('{}', 'hex')); return 'no-error'; }} catch (e) {{ return e.name + ':' + e.message; }} }})()",
+            hex_of(&compressed)
+        ))
+        .unwrap();
+        assert!(out.starts_with("RangeError:"), "got: {out}");
+        assert!(out.contains("exceeds"), "got: {out}");
+    }
+
+    // Fixed 1024-bit RSA test keypair (test-only material, never used in
+    // production; embedded so tests are fully deterministic).
+    const RSA_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDtoJYSBwozYUP3c90ciX+76+UW\ncmqCPEFSiL+QhKVa+PXqXntyVS5YtkGajiaJdap2iEGt91dgP2Zag30I3aTCssGR\n5BLWL6JK1wFJR3uVUzZr4VpkylnMUI9tomP6k2guxm19s1WfYUH70kmwTUKqk5dN\nIJCNb84gKtShV0MzVQIDAQAB\n-----END PUBLIC KEY-----";
+    const RSA_PRIV_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIICeAIBADANBgkqhkiG9w0BAQEFAASCAmIwggJeAgEAAoGBAO2glhIHCjNhQ/dz\n3RyJf7vr5RZyaoI8QVKIv5CEpVr49epee3JVLli2QZqOJol1qnaIQa33V2A/ZlqD\nfQjdpMKywZHkEtYvokrXAUlHe5VTNmvhWmTKWcxQj22iY/qTaC7GbX2zVZ9hQfvS\nSbBNQqqTl00gkI1vziAq1KFXQzNVAgMBAAECgYEAmRro1oC2r9gxpJSAmMx3AqvB\nFS9vNK6CIB1/4Cu3JuBWAkYSH96GWB5GMsD4T4UC6hBs0RwWrirrVdJ2k2nLp3EC\nk0+nf1IPou7YEKooxGV/QgjO4HKrLROBozWlITYYC938ao3q0s0dHHm7mXcBYOm+\nny/Z8ubOlXxoLEbWocECQQD73hfb+iTxbBW7kAHib5FdXpeFGMAAU0b7ZubR8ybA\n8AeAD/5N1Aw4PgPfYKuRwM0+rYQO9BVAK10GswXHq48pAkEA8YauKzGwTMfNGy6L\nanhpYuMrYfxzFBayiyKwpo7hdKL9+ePBzeuX8BzBSIB0kmjmM1deG/itYxL6wOmf\nDxiETQJBANWWCXWqMxnoJqXgATkck5EyXhuoWWntNQyMvsDcCckjw7h915H4eERZ\nkr8jI1t+vI6iZpKnuj2oiELeHdCtU8ECQASGjYTprXAC3mj/+kTIdNERiKKRZGaf\n9kB9Keo1CyxwUWn5RoxhObuaDlUZcxW7OXUE0hKcGkOc+23Z8s0JnJECQQDdAjCW\nyIeIqH+YKGL/qaWEt0snXp2wjfbaBq4xbQkko2VD+NNa0R8r3KzCL3QmPrI/MwZJ\nxsTtFjVqEBgTuQm0\n-----END PRIVATE KEY-----";
+    const RSA_N_HEX: &str = "eda09612070a336143f773dd1c897fbbebe516726a823c415288bf9084a55af8f5ea5e7b72552e58b6419a8e268975aa768841adf757603f665a837d08dda4c2b2c191e412d62fa24ad70149477b9553366be15a64ca59cc508f6da263fa93682ec66d7db3559f6141fbd249b04d42aa93974d20908d6fce202ad4a157433355";
+    const RSA_D_HEX: &str = "991ae8d680b6afd831a4948098cc7702abc1152f6f34ae82201d7fe02bb726e0560246121fde86581e4632c0f84f8502ea106cd11c16ae2aeb55d2769369cba77102934fa77f520fa2eed810aa28c4657f4208cee072ab2d1381a335a52136180bddfc6a8dead2cd1d1c79bb99770160e9be9f2fd9f2e6ce957c682c46d6a1c1";
+
+    #[test]
+    fn rsa_encrypt_pem_zero_left_pads_and_recovers_plaintext() {
+        let script = format!(
+            "(function(){{ try {{ \
+                var ct = lx.utils.crypto.rsaEncrypt(lx.utils.buffer.from('68656c6c6f', 'hex'), '{}'); \
+                return lx.utils.buffer.bufToString(ct, 'hex'); \
+            }} catch (e) {{ return 'err:' + e.name + ':' + e.message; }} }})()",
+            RSA_PUB_PEM.replace('\n', "\\n")
+        );
+        let out = eval_with_lx(&script).unwrap();
+        assert!(!out.starts_with("err:"), "{out}");
+        let ct = hex::decode(out.trim()).unwrap();
+        assert_eq!(ct.len(), 128);
+
+        // Deterministic raw RSA: c = (0x00..00 || "hello")^e mod n.
+        let n = BigUint::from_bytes_be(&hex::decode(RSA_N_HEX).unwrap());
+        let e = BigUint::from(65537u32);
+        let mut padded = vec![0u8; 128 - 5];
+        padded.extend_from_slice(b"hello");
+        let expected = BigUint::from_bytes_be(&padded).modpow(&e, &n).to_bytes_be();
+        let mut expected_full = vec![0u8; 128 - expected.len()];
+        expected_full.extend_from_slice(&expected);
+        assert_eq!(ct, expected_full);
+
+        // Decrypt with the private exponent: recovers the zero-padded block.
+        let d = BigUint::from_bytes_be(&hex::decode(RSA_D_HEX).unwrap());
+        let recovered = BigUint::from_bytes_be(&ct).modpow(&d, &n).to_bytes_be();
+        let mut recovered_full = vec![0u8; 128 - recovered.len()];
+        recovered_full.extend_from_slice(&recovered);
+        assert_eq!(recovered_full, padded);
+    }
+
+    #[test]
+    fn rsa_encrypt_pem_rejects_input_larger_than_block() {
+        let long_hex = "41".repeat(129);
+        let template = "(function(){ try { lx.utils.crypto.rsaEncrypt(lx.utils.buffer.from('@@HEX@@', 'hex'), '@@KEY@@'); return 'no-error'; } catch (e) { return e.name; } })()";
+        let script = template
+            .replace("@@HEX@@", &long_hex)
+            .replace("@@KEY@@", &RSA_PUB_PEM.replace('\n', "\\n"));
+        let out = eval_with_lx(&script).unwrap();
+        assert!(out.ends_with("RangeError"), "got: {out}");
+    }
+
+    #[test]
+    fn rsa_encrypt_legacy_hex_modulus_keeps_pkcs1_v15() {
+        let modulus_hex = RSA_N_HEX.to_string();
+        let script = format!(
+            "(function(){{ try {{ \
+                var ct = lx.utils.crypto.rsaEncrypt(lx.utils.buffer.from('68656c6c6f', 'hex'), '{}'); \
+                return lx.utils.buffer.bufToString(ct, 'hex'); \
+            }} catch (e) {{ return 'err:' + e.name + ':' + e.message; }} }})()",
+            modulus_hex
+        );
+        let out = eval_with_lx(&script).unwrap();
+        assert!(!out.starts_with("err:"), "{out}");
+        let ct = hex::decode(out.trim()).unwrap();
+        assert_eq!(ct.len(), 128);
+
+        // PKCS#1 v1.5 unpad via raw private op: 0x00 0x02 <pad> 0x00 <msg>.
+        let n = BigUint::from_bytes_be(&hex::decode(RSA_N_HEX).unwrap());
+        let d = BigUint::from_bytes_be(&hex::decode(RSA_D_HEX).unwrap());
+        let m = BigUint::from_bytes_be(&ct).modpow(&d, &n).to_bytes_be();
+        let mut block = vec![0u8; 128 - m.len()];
+        block.extend_from_slice(&m);
+        assert_eq!(block[0], 0);
+        assert_eq!(block[1], 2);
+        let sep = (2..block.len())
+            .find(|&i| block[i] == 0)
+            .expect("v1.5 separator");
+        assert_eq!(&block[sep + 1..], b"hello");
+    }
+    #[test]
+    fn md5_string_input_matches_known_vector() {
+        let out = eval_with_lx("(function(){ return lx.utils.crypto.md5('hello'); })()").unwrap();
+        assert_eq!(out, "5d41402abc4b2a76b9719d911017c592");
+    }
+
+    #[test]
+    fn md5_empty_input_is_valid() {
+        let empty_md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let out = eval_with_lx("(function(){ return lx.utils.crypto.md5(''); })()").unwrap();
+        assert_eq!(out, empty_md5);
+        let no_args = eval_with_lx("(function(){ return lx.utils.crypto.md5(); })()").unwrap();
+        assert_eq!(no_args, empty_md5);
+    }
+
+    #[test]
+    fn md5_accepts_array_buffer_input() {
+        let template = "(function(){ var b = lx.utils.buffer.from('@HEX@', 'hex'); return lx.utils.crypto.md5(b); })()";
+        let out = eval_with_lx(&template.replace("@HEX@", "68656c6c6f")).unwrap();
+        assert_eq!(out, "5d41402abc4b2a76b9719d911017c592");
+
+        let empty_buf = eval_with_lx(&template.replace("@HEX@", "")).unwrap();
+        assert_eq!(empty_buf, "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    #[test]
+    fn md5_rejects_wrong_argument_types_with_type_error() {
+        let template = "(function(){ try { lx.utils.crypto.md5(@ARG@); return 'no-error'; } catch (e) { return e.name; } })()";
+        for arg in ["42", "-1", "null", "undefined", "true", "{}", "[]"] {
+            let out = eval_with_lx(&template.replace("@ARG@", arg)).unwrap();
+            assert!(out.starts_with("TypeError"), "md5({arg}) got: {out}");
+        }
+    }
+}
