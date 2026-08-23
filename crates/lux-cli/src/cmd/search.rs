@@ -31,6 +31,25 @@ pub struct SearchDirectives {
     pub kbps: Option<String>,
 }
 
+/// Width of generated CLI IDs in hex characters (64 bits of MD5 output).
+///
+/// Widened from 8 chars (DEF-009/#167): at 32 bits the birthday bound puts
+/// collisions within realistic cache sizes, and `INSERT OR REPLACE` then
+/// silently overwrites an unrelated cached song. At 64 bits collision
+/// probability is negligible (~1e-7 at 100k entries). The `search_cache`
+/// column is TEXT, so widening requires no schema migration; existing 8-char
+/// rows keep resolving through the `get_song_by_cli_id` prefix `LIKE` until
+/// naturally replaced by regenerated 16-char IDs on the next search.
+pub const CLI_ID_LEN: usize = 16;
+
+/// Stable CLI identifier for a song: first [`CLI_ID_LEN`] lowercase hex
+/// characters of MD5 over "<source>-<songmid>".
+fn generate_cli_id(source: &str, songmid: &str) -> String {
+    let hash_input = format!("{}-{}", source, songmid);
+    let digest = md5::Md5::digest(hash_input.as_bytes());
+    hex::encode(digest)[..CLI_ID_LEN].to_string()
+}
+
 pub fn parse_search_directives(keyword: &str) -> SearchDirectives {
     let mut query_parts = Vec::new();
     let mut artist = None;
@@ -495,10 +514,7 @@ pub async fn run(
     let mut cache_entries = Vec::new();
 
     for song in &merged_list {
-        // Generate stable 8-character CLI ID
-        let hash_input = format!("{}-{}", song.source.as_str(), song.songmid);
-        let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = hex::encode(digest)[..8].to_string();
+        let cli_id = generate_cli_id(song.source.as_str(), &song.songmid);
 
         let entry = SearchCacheEntry {
             cli_id: cli_id.clone(),
@@ -569,4 +585,39 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_id_is_16_lowercase_hex_chars() {
+        let id = generate_cli_id("kw", "123456789");
+        assert_eq!(id.len(), CLI_ID_LEN);
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn cli_id_is_deterministic_and_source_sensitive() {
+        assert_eq!(generate_cli_id("kw", "abc"), generate_cli_id("kw", "abc"));
+        assert_ne!(generate_cli_id("kw", "abc"), generate_cli_id("mg", "abc"));
+        assert_ne!(generate_cli_id("kw", "abc"), generate_cli_id("kw", "abd"));
+    }
+
+    #[test]
+    fn cli_id_is_stable_prefix_of_md5_digest() {
+        // The 16-char ID must be the prefix of the full 32-char MD5 hex so
+        // legacy 8-char rows still resolve via the prefix LIKE lookup.
+        let id = generate_cli_id("tx", "song-1");
+        let full = {
+            let digest = md5::Md5::digest(format!("{}-{}", "tx", "song-1").as_bytes());
+            hex::encode(digest)
+        };
+        assert!(full.starts_with(&id));
+        assert_eq!(full.len(), 32);
+    }
 }

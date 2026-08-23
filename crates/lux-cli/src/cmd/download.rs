@@ -9,8 +9,8 @@ use id3::{Frame as Id3Frame, Tag as Id3Tag, TagLike as Id3TagLike};
 use metaflac::Tag as FlacTag;
 use metaflac::block::PictureType as FlacPictureType;
 use std::fs::{self, File};
-use std::io::{Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -284,36 +284,69 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether `pid` refers to a live `alx` download daemon.
+///
+/// On Linux the process identity is verified against procfs: the PID is only
+/// accepted when `/proc/<pid>/comm` (or, as fallback, the basename of the
+/// `/proc/<pid>/exe` symlink) is exactly `alx` or starts with `alx`. A
+/// recycled PID owned by any other program therefore counts as dead. Where
+/// `proc_dir` itself is absent (macOS/Windows have no procfs) identity cannot
+/// be verified and every parseable PID is assumed alive.
+///
+/// `proc_dir` is a parameter seam so tests can inject a fake `/proc` tree.
+pub(crate) fn pid_is_live_daemon(pid: u32, proc_dir: &Path) -> bool {
+    if !proc_dir.is_dir() {
+        return true;
+    }
+    let entry = proc_dir.join(pid.to_string());
+    if let Ok(comm) = fs::read_to_string(entry.join("comm")) {
+        return process_name_is_alx(comm.trim());
+    }
+    if let Ok(exe) = fs::read_link(entry.join("exe")) {
+        if let Some(name) = exe.file_name() {
+            return process_name_is_alx(&name.to_string_lossy());
+        }
+    }
+    false
+}
+
+fn process_name_is_alx(name: &str) -> bool {
+    name.starts_with("alx")
+}
+
+/// Whether the pidfile points at a live `alx` daemon. Missing, unreadable,
+/// unparsable or identity-mismatched pidfiles all count as not running.
+pub(crate) fn daemon_pid_alive(pid_file: &Path, proc_dir: &Path) -> bool {
+    fs::read_to_string(pid_file)
+        .ok()
+        .and_then(|content| content.trim().parse::<u32>().ok())
+        .map(|pid| pid_is_live_daemon(pid, proc_dir))
+        .unwrap_or(false)
+}
+
 pub fn ensure_daemon_running() -> Result<()> {
     let paths = lux_core::config::resolve_paths();
     let pid_file = paths.cache_dir.join("download.pid");
+    let proc_dir = Path::new("/proc");
 
-    let need_spawn = if pid_file.exists() {
-        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                // Check if pid is running in system (using kill(pid, 0) logic or standard command)
-                let status = Command::new("kill")
-                    .arg("-0")
-                    .arg(pid.to_string())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
-                if let Ok(exit_status) = status {
-                    !exit_status.success()
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            true
-        }
-    } else {
-        true
-    };
+    if daemon_pid_alive(&pid_file, proc_dir) {
+        return Ok(());
+    }
 
-    if need_spawn {
+    // Serialize the stale-pidfile removal + spawn across concurrent CLI
+    // processes (O_EXCL sentinel lock, same pattern as the mpv spawn lock):
+    // without it two invocations can both observe a dead daemon and spawn
+    // duplicates racing over `reset_downloading_to_pending()` and `.part`
+    // writes.
+    let lock_path = paths.cache_dir.join("download-daemon.lock");
+    let _spawn_guard = crate::player::spawn_lock::SpawnLock::acquire(&lock_path)?;
+
+    // Double-check under the lock: a competing process may have respawned
+    // the daemon while we waited for it.
+    if !daemon_pid_alive(&pid_file, proc_dir) {
+        // Stale or forged pidfile: remove before respawning so the new
+        // daemon owns the file exclusively.
+        let _ = fs::remove_file(&pid_file);
         let exe = std::env::current_exe()?;
         let _child = Command::new(exe)
             .arg("download")
@@ -445,6 +478,76 @@ async fn process_single_task(
     Ok(())
 }
 
+/// Action to take on a download-stream response after a resume request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangeResponseAction {
+    /// Status is acceptable; keep streaming from the current offset.
+    Proceed,
+    /// Server ignored the Range header (200 for a ranged request); the
+    /// .part must be truncated and the stream restarted from byte 0.
+    RestartFromScratch,
+}
+
+/// Pure decision for a stream-response status given whether a Range header
+/// was sent with this request.
+///
+/// - No range sent: any 2xx proceeds, anything else fails.
+/// - Range sent: 206 Partial Content proceeds as-is, 200 OK means the server
+///   ignored the range and the full body is being replayed -> restart from
+///   scratch, anything else fails.
+fn resume_response_action(
+    status: reqwest::StatusCode,
+    range_sent: bool,
+) -> Result<RangeResponseAction> {
+    if !range_sent {
+        if !status.is_success() {
+            anyhow::bail!("Failed to start download stream: HTTP status {}", status);
+        }
+        return Ok(RangeResponseAction::Proceed);
+    }
+    match status {
+        reqwest::StatusCode::PARTIAL_CONTENT => Ok(RangeResponseAction::Proceed),
+        reqwest::StatusCode::OK => Ok(RangeResponseAction::RestartFromScratch),
+        other => anyhow::bail!("Failed to start download stream: HTTP status {}", other),
+    }
+}
+
+/// Pure length-integrity check run after the chunk loop.
+///
+/// `expected_total` combines the advertised content length with bytes
+/// already present before this request (`content_length + prior_bytes`);
+/// a value of 0 means the server advertised no length (e.g. chunked
+/// transfer) and verification is skipped. A clean mid-body connection close
+/// leaves `bytes_downloaded` short of `expected_total` and is rejected here
+/// instead of being finalized as a completed file.
+fn verify_complete_download(bytes_downloaded: u64, expected_total: u64) -> Result<()> {
+    if expected_total > 0 && bytes_downloaded != expected_total {
+        anyhow::bail!(
+            "Incomplete download: received {} of {} expected bytes (connection closed early); discarding partial file",
+            bytes_downloaded,
+            expected_total
+        );
+    }
+    Ok(())
+}
+
+/// Sniff the audio container from the leading magic bytes of a downloaded
+/// file. Recognizes FLAC (`fLaC`) and MP3 (ID3v2 `ID3` tag, or a raw MPEG
+/// audio frame sync `0xFFEx`/`0xFFFx`). Returns `None` when inconclusive so
+/// callers can apply their own fallback.
+fn detect_audio_format(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 4 && &head[..4] == b"fLaC" {
+        return Some("flac");
+    }
+    if head.len() >= 3 && &head[..3] == b"ID3" {
+        return Some("mp3");
+    }
+    if head.len() >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0 {
+        return Some("mp3");
+    }
+    None
+}
+
 async fn execute_download_with_quality(
     task: &DownloadEntry,
     quality: lux_core::types::Quality,
@@ -460,14 +563,9 @@ async fn execute_download_with_quality(
     // Resolve downloadable Stream URL
     let stream_url = sm.resolve_url(&task.source, &task.song_id, quality)?;
 
-    // Determine target extension
-    let extension = if stream_url.contains(".flac") {
-        "flac"
-    } else {
-        "mp3"
-    };
-
     // Atomically write into a .part file inside cache dir
+    // (the container extension is decided after download via magic-byte
+    // sniffing; see `detect_audio_format`).
     let part_filename = format!("{}_{}.part", task.song_id, quality.as_str());
     let part_path = paths.cache_dir.join(&part_filename);
 
@@ -480,9 +578,8 @@ async fn execute_download_with_quality(
 
     let mut existing_bytes = file.metadata()?.len();
 
-    // Resumable HTTP Range requests
-    let mut request = client.get(&stream_url);
-
+    // Resumable HTTP Range requests: probe whether the server supports
+    // byte ranges before relying on resume.
     let support_range = if existing_bytes > 0 {
         if let Ok(head_res) = client.head(&stream_url).send().await {
             if let Some(accept) = head_res.headers().get(reqwest::header::ACCEPT_RANGES) {
@@ -497,23 +594,34 @@ async fn execute_download_with_quality(
         false
     };
 
-    if support_range && existing_bytes > 0 {
-        request = request.header(reqwest::header::RANGE, format!("bytes={}-", existing_bytes));
-        file.seek(SeekFrom::End(0))?;
-    } else {
-        existing_bytes = 0;
-        file.set_len(0)?;
-        file.seek(SeekFrom::Start(0))?;
-    }
+    // Send the stream request. When a Range header was sent but the server
+    // answers 200 OK instead of 206 Partial Content it ignored the range and
+    // is replaying the full body: truncate the .part and restart from
+    // scratch within this task rather than appending a duplicate payload.
+    let mut response = loop {
+        let mut request = client.get(&stream_url);
+        let range_sent = support_range && existing_bytes > 0;
+        if range_sent {
+            file.seek(SeekFrom::End(0))?;
+            request = request.header(reqwest::header::RANGE, format!("bytes={}-", existing_bytes));
+        } else {
+            existing_bytes = 0;
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+        }
 
-    let mut response = request.send().await?;
-    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-    {
-        return Err(anyhow!(
-            "Failed to start download stream: HTTP status {}",
-            response.status()
-        ));
-    }
+        let resp = request.send().await?;
+        match resume_response_action(resp.status(), range_sent)? {
+            RangeResponseAction::Proceed => break resp,
+            RangeResponseAction::RestartFromScratch => {
+                eprintln!(
+                    "↻ Server ignored Range header for '{}'; restarting download from scratch",
+                    task.name
+                );
+                existing_bytes = 0;
+            }
+        }
+    };
 
     let content_len = response.content_length().unwrap_or(0);
     let total_bytes = content_len + existing_bytes;
@@ -547,6 +655,27 @@ async fn execute_download_with_quality(
 
     file.flush()?;
     drop(file);
+
+    // Integrity: reject truncated bodies instead of finalizing them. On
+    // mismatch the .part is deleted so a retry starts from a clean slate.
+    if let Err(e) = verify_complete_download(bytes_downloaded, total_bytes) {
+        let _ = fs::remove_file(&part_path);
+        return Err(e);
+    }
+
+    // Decide the container extension from the actual file head instead of a
+    // URL substring: read the first 16 bytes of the .part and sniff magic
+    // bytes. The URL heuristic only applies when sniffing is inconclusive
+    // (e.g. exotic containers).
+    let mut head = [0u8; 16];
+    let head_len = File::open(&part_path)?.read(&mut head)?;
+    let extension = detect_audio_format(&head[..head_len]).unwrap_or_else(|| {
+        if stream_url.contains(".flac") {
+            "flac"
+        } else {
+            "mp3"
+        }
+    });
 
     // Fetch Lyrics LRC
     let lyric_info = if config.download.embed_lyrics {
@@ -788,5 +917,180 @@ mod tests {
             http_timeout(Some(0)),
             Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS)
         );
+    }
+
+    /// Build a fake procfs tree: `<root>/<pid>/comm` entries plus an
+    /// optional `/exe` symlink (symlinks require Unix).
+    fn fake_proc_dir(tag: &str, pids: &[(&u32, &str)]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("alx-test-proc-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for (pid, comm) in pids {
+            let dir = root.join(pid.to_string());
+            fs::create_dir_all(&dir).expect("create fake proc entry");
+            fs::write(dir.join("comm"), format!("{comm}\n")).expect("write fake comm");
+        }
+        root
+    }
+
+    #[test]
+    fn test_pid_identity_accepts_alx_comm() {
+        let pid = 4242u32;
+        let proc_dir = fake_proc_dir("accept", &[(&pid, "alx")]);
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+        // Prefix match also accepted (e.g. threaded/renamed binaries).
+        fs::write(proc_dir.join("4242").join("comm"), "alx-daemon\n").unwrap();
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_pid_identity_rejects_foreign_and_absent() {
+        let foreign = 1111u32;
+        let ghost = 2222u32;
+        let proc_dir = fake_proc_dir("reject", &[(&foreign, "mpv")]);
+        // Recycled PID now owned by another program counts as dead.
+        assert!(!pid_is_live_daemon(foreign, &proc_dir));
+        // Absent /proc/<pid> entry counts as dead.
+        assert!(!pid_is_live_daemon(ghost, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pid_identity_falls_back_to_exe_basename() {
+        use std::os::unix::fs::symlink;
+
+        let pid = 5150u32;
+        let proc_dir = fake_proc_dir("exe", &[(&pid, "")]);
+        let entry = proc_dir.join("5150");
+        fs::remove_file(entry.join("comm")).unwrap();
+        let target = proc_dir.join("alx-worker");
+        fs::write(&target, b"elf").unwrap();
+        symlink(&target, entry.join("exe")).unwrap();
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+
+        fs::remove_file(entry.join("exe")).unwrap();
+        symlink(proc_dir.join("other-program"), entry.join("exe")).unwrap();
+        assert!(!pid_is_live_daemon(pid, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_pid_identity_assumes_alive_without_procfs() {
+        // No procfs on this platform: identity cannot be verified.
+        assert!(pid_is_live_daemon(
+            9999,
+            &PathBuf::from("/nonexistent-proc-dir")
+        ));
+    }
+
+    #[test]
+    fn test_daemon_pid_alive_parses_pidfile() {
+        let base = std::env::temp_dir().join(format!("alx-test-pidfile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let pid_file = base.join("download.pid");
+
+        // Missing pidfile -> not alive.
+        assert!(!daemon_pid_alive(
+            &pid_file,
+            &PathBuf::from("/nonexistent-proc")
+        ));
+
+        // Unparsable content -> not alive.
+        fs::write(&pid_file, "not-a-pid\n").unwrap();
+        assert!(!daemon_pid_alive(
+            &pid_file,
+            &PathBuf::from("/nonexistent-proc")
+        ));
+
+        let live = 7331u32;
+        let proc_dir = fake_proc_dir("pidfile", &[(&live, "alx")]);
+        fs::write(&pid_file, format!("{live}\n")).unwrap();
+        assert!(daemon_pid_alive(&pid_file, &proc_dir));
+
+        // Live PID but foreign process -> stale.
+        fs::write(&pid_file, format!("{}\n", 8675u32)).unwrap();
+        assert!(!daemon_pid_alive(&pid_file, &proc_dir));
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_verify_complete_download_rejects_truncation() {
+        assert!(verify_complete_download(1000, 1000).is_ok());
+        // Unknown advertised length (0) skips verification.
+        assert!(verify_complete_download(0, 0).is_ok());
+        assert!(verify_complete_download(123, 0).is_ok());
+        // Clean mid-body close leaves the file short and must fail.
+        let err = verify_complete_download(640, 1024).unwrap_err();
+        assert!(err.to_string().contains("received 640 of 1024"));
+        // Oversized bodies are also a mismatch.
+        assert!(verify_complete_download(2048, 1024).is_err());
+    }
+
+    #[test]
+    fn test_resume_response_action_206_vs_200() {
+        let ok = reqwest::StatusCode::OK;
+        let partial = reqwest::StatusCode::PARTIAL_CONTENT;
+        let server_error = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+
+        // Plain request: any 2xx proceeds.
+        assert_eq!(
+            resume_response_action(ok, false).unwrap(),
+            RangeResponseAction::Proceed
+        );
+        assert!(resume_response_action(server_error, false).is_err());
+
+        // Ranged request: only 206 may proceed; 200 means the range was
+        // ignored -> restart from scratch; other statuses fail.
+        assert_eq!(
+            resume_response_action(partial, true).unwrap(),
+            RangeResponseAction::Proceed
+        );
+        assert_eq!(
+            resume_response_action(ok, true).unwrap(),
+            RangeResponseAction::RestartFromScratch
+        );
+        assert!(resume_response_action(server_error, true).is_err());
+    }
+
+    #[test]
+    fn test_detect_audio_format_flac() {
+        let mut head = vec![0x66, 0x4C, 0x61, 0x43]; // "fLaC"
+        head.extend_from_slice(&[0x00, 0x00, 0x00, 0x22]);
+        assert_eq!(detect_audio_format(&head), Some("flac"));
+    }
+
+    #[test]
+    fn test_detect_audio_format_id3() {
+        let mut head = b"ID3".to_vec();
+        head.extend_from_slice(&[0x04, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00]);
+        assert_eq!(detect_audio_format(&head), Some("mp3"));
+        // ID3 requires all three bytes; a truncated head is inconclusive.
+        assert_eq!(detect_audio_format(b"ID"), None);
+    }
+
+    #[test]
+    fn test_detect_audio_format_mpeg_frame_sync() {
+        // 0xFFFB / 0xFFE3 both match the 11-bit frame sync (0xFFEx/0xFFFx).
+        assert_eq!(detect_audio_format(&[0xFF, 0xFB, 0x90, 0x00]), Some("mp3"));
+        assert_eq!(detect_audio_format(&[0xFF, 0xE3, 0x00, 0x00]), Some("mp3"));
+        // 2-byte sync only: still detected.
+        assert_eq!(detect_audio_format(&[0xFF, 0xFA]), Some("mp3"));
+        // Non-sync leading byte or low bits clear -> inconclusive.
+        assert_eq!(detect_audio_format(&[0xFE, 0xFB]), None);
+        assert_eq!(detect_audio_format(&[0xFF, 0x00]), None);
+        assert_eq!(detect_audio_format(&[0xFF]), None);
+    }
+
+    #[test]
+    fn test_detect_audio_format_inconclusive() {
+        assert_eq!(detect_audio_format(&[]), None);
+        assert_eq!(detect_audio_format(b"RIFF....WAVEfmt "), None);
+        assert_eq!(detect_audio_format(b"<html><body>404"), None);
+        // Exactly 16 bytes are sufficient for every signature.
+        assert_eq!(detect_audio_format(&b"fLaC".to_vec()), Some("flac"));
     }
 }
