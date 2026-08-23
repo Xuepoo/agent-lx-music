@@ -716,16 +716,19 @@ fn base64_decode(data: &str) -> Result<Vec<u8>> {
                 result.push((n & 255) as u8);
             }
             3 => {
+                // 3 chars = 18-bit value -> 2 bytes (16 bits); low 2 bits are
+                // canonical padding. byte0 = top 8 bits, byte1 = next 8 bits.
                 let n = ((alphabet[chunk[0] as usize] as u32) << 12)
                     | ((alphabet[chunk[1] as usize] as u32) << 6)
                     | (alphabet[chunk[2] as usize] as u32);
-                result.push(((n >> 8) & 255) as u8);
-                result.push((n & 255) as u8);
+                result.push(((n >> 10) & 255) as u8);
+                result.push(((n >> 2) & 255) as u8);
             }
             2 => {
+                // 2 chars = 12-bit value -> 1 byte; low 4 bits are padding.
                 let n = ((alphabet[chunk[0] as usize] as u32) << 6)
                     | (alphabet[chunk[1] as usize] as u32);
-                result.push(((n >> 2) & 255) as u8);
+                result.push(((n >> 4) & 255) as u8);
             }
             _ => {}
         }
@@ -901,3 +904,55 @@ globalThis._asyncToGenerator = function(fn) {
   };
 };
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_decode_padded_final_chunk_three_chars() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode("YWI=").unwrap(), b"ab");
+    }
+
+    #[test]
+    fn base64_decode_padded_single_byte() {
+        assert_eq!(base64_decode("YQ==").unwrap(), b"a");
+    }
+
+    #[test]
+    fn base64_decode_unpadded_input_still_works() {
+        assert_eq!(base64_decode("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(base64_decode("YQ").unwrap(), b"a");
+        assert_eq!(base64_decode("").unwrap(), b"");
+    }
+
+    #[test]
+    fn base64_encode_known_vectors_standard_alphabet() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+    }
+
+    #[test]
+    fn base64_roundtrip_random_lengths() {
+        let mut seed: u64 = 0x1234_5678_9abc_def0;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            seed >> 11
+        };
+        for len in 0usize..64 {
+            let buf: Vec<u8> = (0..len).map(|_| (next() & 0xff) as u8).collect();
+            let enc = base64_encode(&buf);
+            assert_eq!(
+                base64_decode(&enc).unwrap(),
+                buf,
+                "round-trip failed for len {len}"
+            );
+        }
+    }
+}
