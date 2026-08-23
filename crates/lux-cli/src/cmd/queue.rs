@@ -378,7 +378,7 @@ fn paths_to_current_json() -> std::path::PathBuf {
 /// position `to`. mpv interprets the second argument as "the entry whose
 /// place is taken", so moving forward needs `to + 1`; moving backward uses
 /// `to` directly.
-fn mpv_playlist_move_target(from: usize, to: usize) -> usize {
+pub(crate) fn mpv_playlist_move_target(from: usize, to: usize) -> usize {
     if from < to { to + 1 } else { to }
 }
 
