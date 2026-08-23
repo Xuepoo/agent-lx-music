@@ -42,6 +42,11 @@ pub fn get_db_conn() -> Result<Connection> {
     let conn = Connection::open(&paths.db_file)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    // DEF-010/#146: the schema declares ON DELETE CASCADE on playlist_songs,
+    // but SQLite defaults to foreign_keys=OFF per connection. Enforce it and
+    // surface failures instead of silently degrading referential integrity.
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| anyhow::anyhow!("Failed to enable SQLite foreign_keys pragma: {}", e))?;
     Ok(conn)
 }
 
@@ -198,6 +203,14 @@ pub fn init_db() -> Result<()> {
             last_fail_at         TEXT,
             circuit_broken_until TEXT
         );",
+        [],
+    )?;
+
+    // DEF-010/#146: databases written before foreign_keys enforcement may
+    // already hold playlist_songs rows whose playlist is gone. Sweep them at
+    // startup; the statement is idempotent and cheap (indexed playlist_id).
+    conn.execute(
+        "DELETE FROM playlist_songs WHERE playlist_id NOT IN (SELECT id FROM playlists)",
         [],
     )?;
 
@@ -1107,16 +1120,171 @@ pub fn list_sources_health() -> Result<Vec<SourceHealthEntry>> {
 mod tests {
     use super::*;
     use std::env;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // All DB tests share the process-wide ALX_HOME env var; serialize them.
+    static DB_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn sandbox_home(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(name);
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        unsafe {
+            env::set_var("ALX_HOME", dir.to_str().unwrap());
+        }
+        dir
+    }
+
+    fn release_sandbox(dir: &PathBuf) {
+        let _ = fs::remove_dir_all(dir);
+        unsafe {
+            env::remove_var("ALX_HOME");
+        }
+    }
+
+    fn sample_entry(cli_id: &str, song_id: &str) -> SearchCacheEntry {
+        SearchCacheEntry {
+            cli_id: cli_id.to_string(),
+            song_id: song_id.to_string(),
+            name: "Test Song".to_string(),
+            singer: "Test Singer".to_string(),
+            source: "wy".to_string(),
+            interval: Some("03:30".to_string()),
+            album_name: Some("Test Album".to_string()),
+            album_id: Some("123".to_string()),
+            pic_url: Some("http://pic.com".to_string()),
+            songmid: Some(song_id.to_string()),
+            hash: None,
+            extra: None,
+        }
+    }
+
+    /// DEF-010/#146: ON DELETE CASCADE must actually fire now that the
+    /// foreign_keys pragma is enabled per connection.
+    #[test]
+    fn test_foreign_keys_cascade_on_playlist_delete() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-fk-cascade");
+
+        init_db().unwrap();
+        create_playlist("Cascade", None).unwrap();
+        let entry = sample_entry("fkcli1", "fksong1");
+        insert_search_cache(&entry).unwrap();
+        add_to_playlist("Cascade", &entry).unwrap();
+
+        let count_before = playlist_song_rows("Cascade");
+        assert_eq!(count_before, 1);
+
+        delete_playlist("Cascade").unwrap();
+        assert_eq!(playlist_song_rows("Cascade"), 0);
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-010/#146: init_db() must sweep orphaned playlist_songs rows left
+    /// behind by older versions that ran with foreign_keys disabled.
+    #[test]
+    fn test_init_db_sweeps_pre_existing_orphans() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-orphan-sweep");
+        let db_file = lux_core::config::resolve_paths().db_file;
+        fs::create_dir_all(db_file.parent().unwrap()).unwrap();
+
+        // Simulate a legacy database: FKs off (raw connection bypasses
+        // get_db_conn and explicitly disables enforcement, matching writers
+        // built against SQLite defaults where foreign_keys starts OFF),
+        // a deleted playlist leaves orphaned song rows behind.
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            raw.pragma_update(None, "foreign_keys", "OFF").unwrap();
+            raw.execute(
+                "CREATE TABLE playlists (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    song_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "CREATE TABLE playlist_songs (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                    song_id     TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    name        TEXT NOT NULL,
+                    singer      TEXT NOT NULL,
+                    album_name  TEXT,
+                    interval    TEXT,
+                    pic_url     TEXT,
+                    position    INTEGER NOT NULL,
+                    added_at    TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "INSERT INTO playlists (name, created_at, updated_at)
+                 VALUES ('Ghost', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+            for pos in 0..2 {
+                raw.execute(
+                    "INSERT INTO playlist_songs (playlist_id, song_id, source, name, singer,
+                        position, added_at)
+                     VALUES ((SELECT id FROM playlists WHERE name = 'Ghost'), ?1, 'wy',
+                        'Orphan Song', 'Orphan Singer', ?2, '2026-01-01T00:00:00+00:00')",
+                    params![format!("orphan{}", pos), pos],
+                )
+                .unwrap();
+            }
+            // FKs are OFF on this raw connection, so this delete leaks rows.
+            raw.execute("DELETE FROM playlists WHERE name = 'Ghost'", [])
+                .unwrap();
+        }
+
+        assert_eq!(orphan_rows(), 2);
+
+        init_db().unwrap();
+        assert_eq!(orphan_rows(), 0);
+        // Idempotent: re-running keeps the library consistent.
+        init_db().unwrap();
+        assert_eq!(orphan_rows(), 0);
+
+        release_sandbox(&dir);
+    }
+
+    fn playlist_song_rows(playlist_name: &str) -> i64 {
+        let conn = get_db_conn().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM playlist_songs
+             WHERE playlist_id = (SELECT id FROM playlists WHERE name = ?1)",
+            params![playlist_name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn orphan_rows() -> i64 {
+        let conn = get_db_conn().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM playlist_songs WHERE playlist_id NOT IN (SELECT id FROM playlists)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn test_db_all_operations() {
-        let temp_dir = env::temp_dir().join("alx-test-db-all-ops");
-        if temp_dir.exists() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-        }
-        unsafe {
-            env::set_var("ALX_HOME", temp_dir.to_str().unwrap());
-        }
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let temp_dir = sandbox_home("alx-test-db-all-ops");
 
         assert!(init_db().is_ok());
 
@@ -1221,10 +1389,6 @@ mod tests {
         assert!(cached.rlyric.is_none());
         assert!(cached.lxlyric.is_none());
 
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe {
-            env::remove_var("ALX_HOME");
-        }
+        release_sandbox(&temp_dir);
     }
 }
