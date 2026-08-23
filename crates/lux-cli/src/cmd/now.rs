@@ -71,14 +71,8 @@ pub fn run(json: bool) -> Result<()> {
             }
 
             // Construct progress bar (20 chars wide)
-            let percent = if duration > 0.0 { pos / duration } else { 0.0 };
-            let filled = (percent * 20.0).round() as usize;
-            let empty = 20 - filled;
-            let bar = format!(
-                "{}{}",
-                "█".repeat(filled).green(),
-                "░".repeat(empty).dimmed()
-            );
+            let (filled, empty) = progress_bar(pos, duration);
+            let bar = format!("{}{}", filled.green(), empty.dimmed());
 
             let current_time = format_time(pos);
             let total_time = format_time(duration);
@@ -111,4 +105,49 @@ pub fn run(json: bool) -> Result<()> {
 fn format_time(secs_f: f64) -> String {
     let secs = secs_f.round() as i64;
     format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+/// 20-char progress bar split into (filled, empty) runs.
+///
+/// `pos` can exceed `duration` (live streams report bogus durations) and
+/// both are clamped so the subtraction can never underflow.
+const BAR_WIDTH: usize = 20;
+
+fn progress_bar(pos: f64, duration: f64) -> (String, String) {
+    let percent = if duration > 0.0 { pos / duration } else { 0.0 };
+    let filled = ((percent * BAR_WIDTH as f64).round() as i64).clamp(0, BAR_WIDTH as i64) as usize;
+    ("█".repeat(filled), "░".repeat(BAR_WIDTH - filled))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::progress_bar;
+
+    fn widths((f, e): &(String, String)) -> (usize, usize) {
+        (f.chars().count(), e.chars().count())
+    }
+
+    #[test]
+    fn pos_beyond_duration_clamps_to_full_bar() {
+        assert_eq!(widths(&progress_bar(250.0, 200.0)), (20, 0));
+        assert_eq!(widths(&progress_bar(1e9, 3.5)), (20, 0));
+    }
+
+    #[test]
+    fn zero_duration_yields_empty_bar() {
+        assert_eq!(widths(&progress_bar(12.0, 0.0)), (0, 20));
+        assert_eq!(widths(&progress_bar(0.0, 0.0)), (0, 20));
+    }
+
+    #[test]
+    fn exact_bounds() {
+        assert_eq!(widths(&progress_bar(0.0, 100.0)), (0, 20));
+        assert_eq!(widths(&progress_bar(100.0, 100.0)), (20, 0));
+        assert_eq!(widths(&progress_bar(50.0, 100.0)), (10, 10));
+    }
+
+    #[test]
+    fn negative_position_clamps_to_zero() {
+        assert_eq!(widths(&progress_bar(-3.0, 100.0)), (0, 20));
+    }
 }

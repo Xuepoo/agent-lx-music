@@ -8,6 +8,7 @@ use lux_core::types::Quality;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::thread;
 use std::time::Duration;
 
 use rand::seq::SliceRandom;
@@ -154,8 +155,7 @@ pub async fn run(
                             client.play_file_or_url(&resolved_url)?;
                             client.set_volume(volume)?;
                             if last_pos > 0.0 {
-                                std::thread::sleep(Duration::from_millis(300));
-                                let _ = client.seek(&last_pos.to_string());
+                                resume_seek(&client, last_pos, json);
                             }
                             return Ok(());
                         }
@@ -370,4 +370,118 @@ fn save_currently_playing(entry: &SearchCacheEntry) -> Result<()> {
     let serialized = serde_json::to_string(&state)?;
     fs::write(current_json_path, serialized)?;
     Ok(())
+}
+
+/// Wait until mpv reports the freshly loaded file as seekable, then seek.
+///
+/// The fixed 300 ms sleep this replaces raced `loadfile` on slow sources and
+/// discarded seek failures. Now bounded polling (up to
+/// [`SEEK_POLL_ATTEMPTS`] x [`SEEK_POLL_INTERVAL`]) waits for the
+/// `seekable` property; a timeout or failed seek is reported as a warning
+/// plus non-fatal status line instead of aborting the resume.
+const SEEK_POLL_ATTEMPTS: u32 = 50;
+const SEEK_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Poll `probe` up to `max_attempts` times every `interval`; true on first
+/// success. Test seam: pass `Duration::ZERO` to run without real waiting.
+fn poll_until<F: FnMut() -> bool>(mut probe: F, max_attempts: u32, interval: Duration) -> bool {
+    for _ in 0..max_attempts {
+        if probe() {
+            return true;
+        }
+        thread::sleep(interval);
+    }
+    false
+}
+
+fn resume_seek(client: &MpvClient, last_pos: f64, json: bool) {
+    let socket = client.socket_path.clone();
+    let ready = poll_until(
+        || {
+            crate::player::ipc::send_mpv_command(
+                &socket,
+                vec![json!("get_property"), json!("seekable")],
+            )
+            .map(|v| v.as_bool().unwrap_or(false))
+            .unwrap_or(false)
+        },
+        SEEK_POLL_ATTEMPTS,
+        SEEK_POLL_INTERVAL,
+    );
+
+    if !ready {
+        let waited_secs = SEEK_POLL_ATTEMPTS as u64 * SEEK_POLL_INTERVAL.as_millis() as u64 / 1000;
+        eprintln!(
+            "warning: playback not seekable after {waited_secs}s; resumed from the beginning"
+        );
+        report_seek_skipped(json);
+        return;
+    }
+
+    if let Err(e) = client.seek(&last_pos.to_string()) {
+        eprintln!("warning: resume seek to {last_pos:.1}s failed: {e:#}");
+        report_seek_skipped(json);
+    }
+}
+
+fn report_seek_skipped(json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "status": "resumed", "seek": "skipped" })
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::poll_until;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    #[test]
+    fn returns_immediately_when_probe_succeeds() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let c2 = calls.clone();
+        let ok = poll_until(
+            || {
+                c2.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+            50,
+            Duration::ZERO,
+        );
+        assert!(ok);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn exhausts_attempts_and_reports_calls() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let c2 = calls.clone();
+        let ok = poll_until(
+            || {
+                c2.fetch_add(1, Ordering::SeqCst);
+                false
+            },
+            7,
+            Duration::ZERO,
+        );
+        assert!(!ok);
+        assert_eq!(calls.load(Ordering::SeqCst), 7);
+    }
+
+    #[test]
+    fn succeeds_on_later_attempt() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let c2 = calls.clone();
+        let ok = poll_until(
+            || c2.fetch_add(1, Ordering::SeqCst) >= 3,
+            50,
+            Duration::ZERO,
+        );
+        assert!(ok);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
 }

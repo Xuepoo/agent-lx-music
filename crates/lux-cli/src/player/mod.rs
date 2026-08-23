@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
 pub mod ipc;
+pub mod spawn_lock;
 
 use anyhow::{Result, anyhow};
 use serde_json::json;
@@ -35,6 +36,16 @@ local function get_cache_dir()
     return home .. "/.cache/agent-lx-music"
 end
 
+-- Write via temp file + rename so concurrent readers never observe torn JSON.
+local function atomic_write(path, data)
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, "w")
+    if not f then return nil end
+    f:write(data)
+    f:close()
+    os.rename(tmp, path)
+end
+
 local function update_state()
     print("Lua: update_state triggered")
     local pos = mp.get_property_number("time-pos", 0)
@@ -63,11 +74,7 @@ local function update_state()
     if queue.current_index ~= index then
         print("Lua: Updating queue index to " .. index)
         queue.current_index = index
-        local fq = io.open(queue_path, "w")
-        if fq then
-            fq:write(utils.format_json(queue))
-            fq:close()
-        end
+        atomic_write(queue_path, utils.format_json(queue))
     end
     
     local song = queue.songs[index + 1]
@@ -79,11 +86,7 @@ local function update_state()
             volume = math.floor(vol),
             updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
         }
-        local fc = io.open(current_path, "w")
-        if fc then
-            fc:write(utils.format_json(state))
-            fc:close()
-        end
+        atomic_write(current_path, utils.format_json(state))
     else
         print("Lua: No song found in queue at index " .. index)
     end
@@ -109,12 +112,34 @@ impl MpvClient {
         }
     }
 
+    /// Probe-only variant of [`MpvClient::ensure_running`] that never spawns
+    /// a daemon. Use for stateless commands where silently cold-starting
+    /// headless mpv is a surprising side effect.
+    pub fn try_ensure_running(&self) -> Result<()> {
+        if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "Player daemon is not running (start playback with 'alx play' first)"
+            ))
+        }
+    }
+
     pub fn ensure_running(&self) -> Result<()> {
+        // Serialize probe→spawn across processes: two concurrent invocations
+        // must not both unlink/bind/spawn. Hold the lock for the whole
+        // critical section.
+        let _spawn_guard =
+            spawn_lock::SpawnLock::acquire(&self.socket_path.with_extension("lock"))?;
+
+        // Re-probe inside the critical section: another process may have
+        // finished spawning mpv while we waited for the lock.
         if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
             return Ok(());
         }
 
-        // Clean up stale socket file if it exists
+        // Clean up stale socket file if it exists (safe: nothing can have
+        // freshly bound it while we hold the spawn lock).
         if self.socket_path.exists() {
             let _ = fs::remove_file(&self.socket_path);
         }
@@ -148,18 +173,22 @@ impl MpvClient {
 
         // Auto-mount mpv-mpris if enabled
         if config.player.enable_mpris {
-            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/fuyu"));
-            let mpris_paths = vec![
-                home.join(".config/mpv/scripts/mpris.so"),
-                PathBuf::from("/usr/lib/mpv/scripts/mpris.so"),
-                PathBuf::from("/usr/lib/mpv/mpris.so"),
-                PathBuf::from("/usr/lib/mpv-mpris/mpris.so"),
-                PathBuf::from("/usr/lib/x86_64-linux-gnu/mpv/scripts/mpris.so"),
-            ];
-            for path in mpris_paths {
-                if path.exists() {
-                    cmd.arg(format!("--script={}", path.display()));
-                    break;
+            // Without a resolvable home directory the user-config script
+            // location is unknown; skip auto-mount entirely rather than
+            // guessing a hardcoded path.
+            if let Some(home) = dirs::home_dir() {
+                let mpris_paths = vec![
+                    home.join(".config/mpv/scripts/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv/scripts/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv-mpris/mpris.so"),
+                    PathBuf::from("/usr/lib/x86_64-linux-gnu/mpv/scripts/mpris.so"),
+                ];
+                for path in mpris_paths {
+                    if path.exists() {
+                        cmd.arg(format!("--script={}", path.display()));
+                        break;
+                    }
                 }
             }
         }
@@ -168,16 +197,35 @@ impl MpvClient {
             cmd.arg(arg);
         }
 
-        // Redirect stdout/stderr to a log file to allow inspection of background execution issues
+        // Redirect stdout/stderr to a log file to allow inspection of
+        // background execution issues; fall back to /dev/null when the cache
+        // directory is unwritable — a missing log must not abort playback.
         let paths = lux_core::config::resolve_paths();
         let log_path = paths.cache_dir.join("mpv.log");
-        let log_file = fs::OpenOptions::new()
+        let (log_file, err_file) = match fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&log_path)
-            .unwrap();
-        let err_file = log_file.try_clone().unwrap();
+        {
+            Ok(file) => match file.try_clone() {
+                Ok(err) => (file.into(), err.into()),
+                Err(e) => {
+                    eprintln!(
+                        "warning: cannot duplicate mpv log file {}: {e}",
+                        log_path.display()
+                    );
+                    (std::process::Stdio::null(), std::process::Stdio::null())
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot open mpv log file {}: {e}",
+                    log_path.display()
+                );
+                (std::process::Stdio::null(), std::process::Stdio::null())
+            }
+        };
 
         cmd.stdout(log_file)
             .stderr(err_file)
@@ -444,22 +492,18 @@ impl MpvClient {
             &self.socket_path,
             vec![json!("get_property"), json!("playlist-playing-pos")],
         )?;
-        if val.is_null() {
-            return Ok(None);
-        }
-        let idx = val.as_i64().map(|v| v as usize);
-        Ok(idx)
+        Ok(normalize_playing_index(val))
     }
 
     pub fn next(&self) -> Result<()> {
-        self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")]);
+        self.try_ensure_running()?;
+        ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")])?;
         Ok(())
     }
 
     pub fn prev(&self) -> Result<()> {
-        self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")]);
+        self.try_ensure_running()?;
+        ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")])?;
         Ok(())
     }
 
@@ -544,5 +588,97 @@ impl MpvClient {
 
     pub fn quit(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Map a failed skip (`playlist-next`/`playlist-prev`) to a clear,
+/// user-facing message. Boundary failures reported by mpv ("no more
+/// files", "no file") become end/start-of-queue notices; anything else is
+/// surfaced verbatim so IPC/socket problems stay diagnosable.
+pub fn describe_skip_error(direction: &str, err: &anyhow::Error) -> String {
+    let msg = format!("{err:#}");
+    if msg.contains("no more files") || msg.contains("no file") {
+        if direction == "next" {
+            "End of queue reached; nothing to skip forward to.".to_string()
+        } else {
+            "Start of queue reached; nothing to skip back to.".to_string()
+        }
+    } else {
+        msg
+    }
+}
+
+/// Map an mpv `playlist-playing-pos` response to a queue position.
+///
+/// `null` (no playlist) and negative values (idle: `-1`) mean "nothing is
+/// playing" — never saturate to index 0.
+fn normalize_playing_index(val: serde_json::Value) -> Option<usize> {
+    val.as_i64()
+        .filter(|v| *v >= 0)
+        .and_then(|v| usize::try_from(v).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_skip_error;
+    use super::normalize_playing_index;
+    use anyhow::anyhow;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn idle_negative_position_maps_to_none() {
+        assert_eq!(normalize_playing_index(json!(-1)), None);
+    }
+
+    #[test]
+    fn absent_property_maps_to_none() {
+        assert_eq!(normalize_playing_index(Value::Null), None);
+        assert_eq!(normalize_playing_index(json!("nonsense")), None);
+        assert_eq!(normalize_playing_index(json!(3.7)), None);
+    }
+
+    #[test]
+    fn valid_positions_pass_through() {
+        assert_eq!(normalize_playing_index(json!(0)), Some(0));
+        assert_eq!(normalize_playing_index(json!(42)), Some(42));
+    }
+
+    #[test]
+    fn boundary_errors_map_to_end_of_queue() {
+        let err = anyhow!("mpv error: no more files");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "End of queue reached; nothing to skip forward to."
+        );
+    }
+
+    #[test]
+    fn boundary_errors_map_to_start_of_queue() {
+        let err = anyhow!("mpv error: no more files");
+        assert_eq!(
+            describe_skip_error("prev", &err),
+            "Start of queue reached; nothing to skip back to."
+        );
+    }
+
+    #[test]
+    fn connection_errors_pass_through_for_diagnosis() {
+        // Daemon absence is reported by try_ensure_running before any skip
+        // happens; if such an error ever reaches the mapper it must stay
+        // verbatim rather than be misread as a queue boundary.
+        let err = anyhow!("Failed to connect to mpv socket: No such file or directory");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "Failed to connect to mpv socket: No such file or directory"
+        );
+    }
+
+    #[test]
+    fn unknown_errors_pass_through_verbatim() {
+        let err = anyhow!("mpv error: something exploded");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "mpv error: something exploded"
+        );
     }
 }
