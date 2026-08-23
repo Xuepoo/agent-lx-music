@@ -38,33 +38,63 @@ struct QueueTableEntry {
 pub fn load_or_init_queue() -> Result<PlayQueue> {
     let paths = lux_core::config::resolve_paths();
     let queue_json_path = paths.cache_dir.join("queue.json");
-    if !queue_json_path.exists() {
+    load_queue_from(&queue_json_path)
+}
+
+/// Load the queue from an explicit path. A missing file initializes an
+/// empty queue; a corrupt one is a hard, read-only error — callers must
+/// never persist a substituted empty queue over data we failed to parse.
+pub(crate) fn load_queue_from(path: &std::path::Path) -> Result<PlayQueue> {
+    if !path.exists() {
         return Ok(PlayQueue {
             songs: Vec::new(),
             current_index: None,
         });
     }
-    let content = fs::read_to_string(queue_json_path)?;
-    let queue: PlayQueue = serde_json::from_str(&content)?;
-    Ok(queue)
+    let content = fs::read_to_string(path)
+        .map_err(|e| anyhow!("Failed to read queue file {}: {e}", path.display()))?;
+    serde_json::from_str(&content).map_err(|e| {
+        anyhow!(
+            "Queue file {} is corrupted and was left untouched (no empty queue was written); \
+             fix or remove it manually: {e}",
+            path.display()
+        )
+    })
 }
 
 pub fn save_queue(queue: &PlayQueue) -> Result<()> {
     let paths = lux_core::config::resolve_paths();
     let queue_json_path = paths.cache_dir.join("queue.json");
-    if let Some(parent) = queue_json_path.parent() {
+    save_queue_to(&queue_json_path, queue)
+}
+
+pub(crate) fn save_queue_to(path: &std::path::Path, queue: &PlayQueue) -> Result<()> {
+    atomic_write(path, &serde_json::to_string(queue)?)
+}
+
+/// Write via temp-file + rename so readers never observe torn content.
+pub(crate) fn atomic_write(path: &std::path::Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let content = serde_json::to_string(queue)?;
-    fs::write(queue_json_path, content)?;
-    Ok(())
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&tmp, contents)?;
+    match fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(anyhow!(
+                "Failed to atomically replace {}: {e}",
+                path.display()
+            ))
+        }
+    }
 }
 
 pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
-    let mut queue = load_or_init_queue().unwrap_or(PlayQueue {
-        songs: Vec::new(),
-        current_index: None,
-    });
+    // A corrupt queue file is fatal and read-only; never fall back to an
+    // empty queue that would then be persisted over the damaged original.
+    let mut queue = load_or_init_queue()?;
     let client = MpvClient::new();
     let mgr = SourceManager::new();
     let config = lux_core::config::Config::load().unwrap_or_default();
@@ -485,5 +515,107 @@ mod tests {
     fn current_index_untouched_by_disjoint_move() {
         assert_eq!(adjust_current_index_after_move(Some(1), 2, 3), Some(1));
         assert_eq!(adjust_current_index_after_move(None, 2, 3), None);
+    }
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("alx-queue-test-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn entry(id: &str) -> SearchCacheEntry {
+        SearchCacheEntry {
+            cli_id: id.to_string(),
+            song_id: id.to_string(),
+            name: format!("Song {id}"),
+            singer: "Artist".to_string(),
+            source: "wy".to_string(),
+            interval: None,
+            album_name: None,
+            album_id: None,
+            pic_url: None,
+            songmid: None,
+            hash: None,
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn atomic_write_creates_and_replaces_without_residue() {
+        let dir = tmp_dir("atomic");
+        let path = dir.join("nested").join("queue.json");
+
+        atomic_write(&path, "{\"v\":1}").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"v\":1}");
+        assert!(path.is_file());
+
+        atomic_write(&path, "{\"v\":2}").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"v\":2}");
+
+        // No temp residue left behind.
+        let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "residue: {leftovers:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn queue_roundtrip_through_explicit_path() {
+        let dir = tmp_dir("roundtrip");
+        let path = dir.join("queue.json");
+
+        save_queue_to(
+            &path,
+            &PlayQueue {
+                songs: vec![entry("a"), entry("b")],
+                current_index: Some(1),
+            },
+        )
+        .unwrap();
+
+        let loaded = load_queue_from(&path).unwrap();
+        assert_eq!(loaded.songs.len(), 2);
+        assert_eq!(loaded.current_index, Some(1));
+        assert_eq!(loaded.songs[1].cli_id, "b");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_file_initializes_empty() {
+        let dir = tmp_dir("missing");
+        let loaded = load_queue_from(&dir.join("absent.json")).unwrap();
+        assert!(loaded.songs.is_empty());
+        assert_eq!(loaded.current_index, None);
+        // Loading must not create the file either.
+        assert!(!dir.join("absent.json").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_file_errors_read_only_and_is_never_clobbered() {
+        let dir = tmp_dir("corrupt");
+        let path = dir.join("queue.json");
+        let torn = "{\"songs\": [{\"cli_id\": \"a\""; // truncated JSON
+        fs::write(&path, torn).unwrap();
+
+        let err = load_queue_from(&path).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("corrupted") && msg.contains("left untouched"),
+            "error must be explicit and read-only: {msg}"
+        );
+
+        // The original bytes are intact — no empty-queue substitution.
+        assert_eq!(fs::read_to_string(&path).unwrap(), torn);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

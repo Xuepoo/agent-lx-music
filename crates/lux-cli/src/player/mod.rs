@@ -36,6 +36,16 @@ local function get_cache_dir()
     return home .. "/.cache/agent-lx-music"
 end
 
+-- Write via temp file + rename so concurrent readers never observe torn JSON.
+local function atomic_write(path, data)
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, "w")
+    if not f then return nil end
+    f:write(data)
+    f:close()
+    os.rename(tmp, path)
+end
+
 local function update_state()
     print("Lua: update_state triggered")
     local pos = mp.get_property_number("time-pos", 0)
@@ -64,11 +74,7 @@ local function update_state()
     if queue.current_index ~= index then
         print("Lua: Updating queue index to " .. index)
         queue.current_index = index
-        local fq = io.open(queue_path, "w")
-        if fq then
-            fq:write(utils.format_json(queue))
-            fq:close()
-        end
+        atomic_write(queue_path, utils.format_json(queue))
     end
     
     local song = queue.songs[index + 1]
@@ -80,11 +86,7 @@ local function update_state()
             volume = math.floor(vol),
             updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
         }
-        local fc = io.open(current_path, "w")
-        if fc then
-            fc:write(utils.format_json(state))
-            fc:close()
-        end
+        atomic_write(current_path, utils.format_json(state))
     else
         print("Lua: No song found in queue at index " .. index)
     end
