@@ -44,7 +44,9 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         }
         Commands::Next => {
             let client = crate::player::MpvClient::new();
-            client.next()?;
+            client
+                .next()
+                .map_err(|e| anyhow!("{}", crate::player::describe_skip_error("next", &e)))?;
             if !json {
                 println!("{} Skipped to the next song.", "⏭".green().bold());
             } else {
@@ -56,7 +58,9 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
         }
         Commands::Prev => {
             let client = crate::player::MpvClient::new();
-            client.prev()?;
+            client
+                .prev()
+                .map_err(|e| anyhow!("{}", crate::player::describe_skip_error("prev", &e)))?;
             if !json {
                 println!("{} Skipped to the previous song.", "⏮".green().bold());
             } else {

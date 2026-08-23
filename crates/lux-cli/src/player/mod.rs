@@ -110,6 +110,19 @@ impl MpvClient {
         }
     }
 
+    /// Probe-only variant of [`MpvClient::ensure_running`] that never spawns
+    /// a daemon. Use for stateless commands where silently cold-starting
+    /// headless mpv is a surprising side effect.
+    pub fn try_ensure_running(&self) -> Result<()> {
+        if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "Player daemon is not running (start playback with 'alx play' first)"
+            ))
+        }
+    }
+
     pub fn ensure_running(&self) -> Result<()> {
         // Serialize probe→spawn across processes: two concurrent invocations
         // must not both unlink/bind/spawn. Hold the lock for the whole
@@ -462,14 +475,14 @@ impl MpvClient {
     }
 
     pub fn next(&self) -> Result<()> {
-        self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")]);
+        self.try_ensure_running()?;
+        ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-next")])?;
         Ok(())
     }
 
     pub fn prev(&self) -> Result<()> {
-        self.ensure_running()?;
-        let _ = ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")]);
+        self.try_ensure_running()?;
+        ipc::send_mpv_command(&self.socket_path, vec![json!("playlist-prev")])?;
         Ok(())
     }
 
@@ -554,5 +567,67 @@ impl MpvClient {
 
     pub fn quit(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Map a failed skip (`playlist-next`/`playlist-prev`) to a clear,
+/// user-facing message. Boundary failures reported by mpv ("no more
+/// files", "no file") become end/start-of-queue notices; anything else is
+/// surfaced verbatim so IPC/socket problems stay diagnosable.
+pub fn describe_skip_error(direction: &str, err: &anyhow::Error) -> String {
+    let msg = format!("{err:#}");
+    if msg.contains("no more files") || msg.contains("no file") {
+        if direction == "next" {
+            "End of queue reached; nothing to skip forward to.".to_string()
+        } else {
+            "Start of queue reached; nothing to skip back to.".to_string()
+        }
+    } else {
+        msg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_skip_error;
+    use anyhow::anyhow;
+
+    #[test]
+    fn boundary_errors_map_to_end_of_queue() {
+        let err = anyhow!("mpv error: no more files");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "End of queue reached; nothing to skip forward to."
+        );
+    }
+
+    #[test]
+    fn boundary_errors_map_to_start_of_queue() {
+        let err = anyhow!("mpv error: no more files");
+        assert_eq!(
+            describe_skip_error("prev", &err),
+            "Start of queue reached; nothing to skip back to."
+        );
+    }
+
+    #[test]
+    fn connection_errors_pass_through_for_diagnosis() {
+        // Daemon absence is reported by try_ensure_running before any skip
+        // happens; if such an error ever reaches the mapper it must stay
+        // verbatim rather than be misread as a queue boundary.
+        let err = anyhow!("Failed to connect to mpv socket: No such file or directory");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "Failed to connect to mpv socket: No such file or directory"
+        );
+    }
+
+    #[test]
+    fn unknown_errors_pass_through_verbatim() {
+        let err = anyhow!("mpv error: something exploded");
+        assert_eq!(
+            describe_skip_error("next", &err),
+            "mpv error: something exploded"
+        );
     }
 }
