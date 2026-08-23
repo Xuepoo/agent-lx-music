@@ -253,8 +253,22 @@ impl Config {
         let content = toml::to_string_pretty(self)
             .map_err(|e| LuxError::Config(format!("Failed to serialize TOML config: {}", e)))?;
 
-        fs::write(&paths.config_file, content)
-            .map_err(|e| LuxError::Io(format!("Failed to write config file: {}", e)))?;
+        // DEF-015/#164: stage the new contents in the same directory as the
+        // target (same filesystem, so rename is atomic), fsync, then swap it
+        // in. A crash mid-write can no longer truncate or half-write
+        // config.toml; staging leftovers are cleaned up on failure.
+        let staging_path = staging_path_for(&paths.config_file);
+        if let Err(e) = write_staging_file(&staging_path, content.as_bytes()) {
+            let _ = fs::remove_file(&staging_path);
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&staging_path, &paths.config_file) {
+            let _ = fs::remove_file(&staging_path);
+            return Err(LuxError::Io(format!(
+                "Failed to replace config file: {}",
+                e
+            )));
+        }
 
         Ok(())
     }
@@ -279,6 +293,25 @@ impl Config {
     pub fn get_resolved_download_dir(&self) -> PathBuf {
         expand_path(&self.download.output_dir)
     }
+}
+
+/// Staging file path for atomic config writes: sibling of the target so the
+/// final rename never crosses a filesystem boundary.
+fn staging_path_for(config_file: &std::path::Path) -> PathBuf {
+    let mut name = config_file.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    config_file.with_file_name(name)
+}
+
+fn write_staging_file(staging_path: &PathBuf, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = fs::File::create(staging_path)
+        .map_err(|e| LuxError::Io(format!("Failed to create staging file: {}", e)))?;
+    file.write_all(bytes)
+        .map_err(|e| LuxError::Io(format!("Failed to write staging file: {}", e)))?;
+    file.sync_all()
+        .map_err(|e| LuxError::Io(format!("Failed to sync staging file: {}", e)))?;
+    Ok(())
 }
 
 pub fn expand_path(path_str: &str) -> PathBuf {
@@ -424,9 +457,189 @@ max_retries = 2
 mod tests {
     use super::*;
     use std::env;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn sandbox_dir(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("{}-{}", name, std::process::id()));
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        dir
+    }
+
+    /// DEF-013/#162: remove every path-influencing alx variable so each test
+    /// starts from a deterministic baseline.
+    fn clear_alx_path_env() {
+        for var in ["ALX_HOME", "ALX_CONFIG", "ALX_DATA", "ALX_CACHE"] {
+            unsafe {
+                env::remove_var(var);
+            }
+        }
+    }
+
+    /// DEF-013/#162 published contract: when ALX_HOME is set, every root
+    /// derives under it (<home>/config.toml, <home>/data, <home>/cache) and
+    /// the remaining path variables are ignored in that mode.
+    #[test]
+    fn test_alx_home_layout_contract() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        clear_alx_path_env();
+
+        let home = sandbox_dir("alx-test-home-contract");
+        unsafe {
+            env::set_var("ALX_HOME", home.to_str().unwrap());
+        }
+
+        let paths = resolve_paths();
+        assert_eq!(paths.config_file, home.join("config.toml"));
+        assert_eq!(paths.data_dir, home.join("data"));
+        assert_eq!(paths.cache_dir, home.join("cache"));
+        assert_eq!(paths.sources_dir, home.join("data").join("sources"));
+        assert_eq!(paths.db_file, home.join("data").join("agent-lx-music.db"));
+
+        // ALX_HOME short-circuits the per-root overrides while active.
+        unsafe {
+            env::set_var("ALX_CONFIG", "/elsewhere/custom.toml");
+        }
+        let paths = resolve_paths();
+        assert_eq!(paths.config_file, home.join("config.toml"));
+
+        unsafe {
+            env::remove_var("ALX_CONFIG");
+            env::remove_var("ALX_HOME");
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// DEF-013/#162: without ALX_HOME the pure XDG layout applies, and the
+    /// documented single-root overrides stay available.
+    #[test]
+    fn test_pure_xdg_mode_when_alx_home_unset() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        clear_alx_path_env();
+
+        let xdg_config = sandbox_dir("alx-test-xdg-config");
+        let xdg_data = sandbox_dir("alx-test-xdg-data");
+        let xdg_cache = sandbox_dir("alx-test-xdg-cache");
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", xdg_config.to_str().unwrap());
+            env::set_var("XDG_DATA_HOME", xdg_data.to_str().unwrap());
+            env::set_var("XDG_CACHE_HOME", xdg_cache.to_str().unwrap());
+        }
+
+        let app_data = xdg_data.join("agent-lx-music");
+        let paths = resolve_paths();
+        assert_eq!(
+            paths.config_file,
+            xdg_config.join("agent-lx-music").join("config.toml")
+        );
+        assert_eq!(paths.data_dir, app_data.clone());
+        assert_eq!(paths.sources_dir, app_data.join("sources"));
+        assert_eq!(paths.db_file, app_data.join("agent-lx-music.db"));
+        assert_eq!(paths.cache_dir, xdg_cache.join("agent-lx-music"));
+
+        // Per-root overrides remain effective when ALX_HOME is unset.
+        let custom_config = xdg_cache.join("custom-config.toml");
+        unsafe {
+            env::set_var("ALX_CONFIG", custom_config.to_str().unwrap());
+        }
+        assert_eq!(resolve_paths().config_file, custom_config);
+        unsafe {
+            env::remove_var("ALX_CONFIG");
+        }
+
+        for var in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"] {
+            unsafe {
+                env::remove_var(var);
+            }
+        }
+        for dir in [&xdg_config, &xdg_data, &xdg_cache] {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    /// DEF-015/#164: save() stages to a .tmp sibling, fsyncs, and atomically
+    /// renames over the target; no staging file is left behind on success.
+    #[test]
+    fn test_save_is_atomic_and_leaves_no_staging_file() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        clear_alx_path_env();
+
+        let home = sandbox_dir("alx-test-atomic-save");
+        unsafe {
+            env::set_var("ALX_HOME", home.to_str().unwrap());
+        }
+
+        let mut config = Config::load().expect("first load initializes default config");
+        config.player.default_volume = 66;
+        config.save().unwrap();
+
+        // The swapped-in file is complete and parses back with the change.
+        let reloaded = Config::load().unwrap();
+        assert_eq!(reloaded.player.default_volume, 66);
+
+        // No staging leftovers in the config directory.
+        let leftovers: Vec<_> = fs::read_dir(home.join("config.toml").parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staging files left behind: {leftovers:?}"
+        );
+
+        unsafe {
+            env::remove_var("ALX_HOME");
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// DEF-015/#164: when the final rename cannot proceed, save() fails and
+    /// cleans up the staging file instead of corrupting the target.
+    #[test]
+    fn test_save_failure_cleans_up_staging_file() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        clear_alx_path_env();
+
+        let home = sandbox_dir("alx-test-atomic-save-failure");
+        fs::create_dir_all(&home).unwrap();
+
+        // Deterministic failure injection without relying on permission
+        // bits (which are meaningless under root): point ALX_CONFIG at a
+        // directory so rename(2) always fails with EISDIR.
+        let target_dir = home.join("config.toml");
+        fs::create_dir_all(&target_dir).unwrap();
+        unsafe {
+            env::set_var("ALX_CONFIG", target_dir.to_str().unwrap());
+        }
+
+        let config: Config = toml::from_str(get_default_config_toml()).unwrap();
+        let err = config.save().unwrap_err();
+        assert!(err.to_string().contains("replace config file"));
+
+        // Staging file was removed and the "target" was left untouched.
+        let leftovers: Vec<_> = fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staging files left behind: {leftovers:?}"
+        );
+        assert!(target_dir.is_dir());
+
+        unsafe {
+            env::remove_var("ALX_CONFIG");
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn test_all_config_operations() {

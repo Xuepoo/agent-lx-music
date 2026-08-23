@@ -432,6 +432,9 @@ pub enum ConfigAction {
     Get { key: String },
     /// Set a config value
     Set { key: String, value: String },
+    /// Open the resolved config file in $VISUAL/$EDITOR (fallback vi),
+    /// then validate it still parses before exiting
+    Edit,
     /// Show config file path
     Path,
 }

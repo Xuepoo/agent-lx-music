@@ -23,7 +23,19 @@
 ### 全局重定向环境变量：`ALX_HOME`
 
 如果您希望将所有配置文件及数据库落地在一个完全隔离或便携式的物理 U 盘路径中，您可以通过设置 `ALX_HOME` 环境变量来实现完全重定向。
-例如，执行 `export ALX_HOME=/tmp/alx-isolated` 后，上述所有 XDG 子路径都将自动重映射至 `/tmp/alx-isolated/.config` 等子文件夹中。
+设置后所有资产统一收纳于该目录之下，物理布局固定为：
+
+```text
+export ALX_HOME=/tmp/alx-isolated
+  ├── /tmp/alx-isolated/config.toml        # 核心配置文件
+  ├── /tmp/alx-isolated/data/              # SQLite 数据库与音源脚本
+  │   ├── agent-lx-music.db
+  │   └── sources/
+  └── /tmp/alx-isolated/cache/             # 临时 mpv socket 等运行缓存
+```
+
+即：配置文件为 `$ALX_HOME/config.toml`，数据目录为 `$ALX_HOME/data`，缓存目录为 `$ALX_HOME/cache`。
+在该模式下，XDG 变量与 `ALX_CONFIG` / `ALX_DATA` / `ALX_CACHE` 均不再参与路径推导。未设置 `ALX_HOME` 时保持纯 XDG 行为（含各 `ALX_*` 单项覆写）。
 
 ---
 
@@ -154,16 +166,16 @@ max_retries = 2
 
 ## 4. 核心系统环境变量汇总
 
-| 环境变量名 | 说明与生效规则 |
-| ---------- | ------------- |
-| `ALX_HOME` | 覆写所有默认 XDG 根目录路径的基准路径 |
-| `ALX_CONFIG` | 精确指定全局配置文件的物理绝对路径 |
-| `ALX_DATA` | 覆写 SQLite 数据库与音源脚本的保存根目录 |
-| `ALX_CACHE` | 覆写临时套接字和运行缓存目录 |
-| `ALX_MPV_SOCKET` | 手动覆写 mpv IPC Local Socket 的物理路径 |
-| `ALX_MPV_BIN` | 覆写要拉起的 mpv 执行文件名 (默认从系统 PATH 寻找 `mpv`) |
-| `HTTP_PROXY` / `HTTPS_PROXY` | 传统的 Linux 终端代理环境变量，在 `config.toml` 缺省时自动生效 |
-| `NO_COLOR` | 遵循现代 CLI 开源规范，设置此变量后，全程序自动进入无染色纯文本输出模式 |
+| 环境变量名                   | 说明与生效规则                                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `ALX_HOME`                   | 将全部资产重定向至该基准目录（`<home>/config.toml`、`<home>/data`、`<home>/cache`），优先级高于其余路径变量 |
+| `ALX_CONFIG`                 | 精确指定全局配置文件的物理绝对路径                                                                          |
+| `ALX_DATA`                   | 覆写 SQLite 数据库与音源脚本的保存根目录                                                                    |
+| `ALX_CACHE`                  | 覆写临时套接字和运行缓存目录                                                                                |
+| `ALX_MPV_SOCKET`             | 手动覆写 mpv IPC Local Socket 的物理路径                                                                    |
+| `ALX_MPV_BIN`                | 覆写要拉起的 mpv 执行文件名 (默认从系统 PATH 寻找 `mpv`)                                                    |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 传统的 Linux 终端代理环境变量，在 `config.toml` 缺省时自动生效                                              |
+| `NO_COLOR`                   | 遵循现代 CLI 开源规范，设置此变量后，全程序自动进入无染色纯文本输出模式                                     |
 
 ---
 
@@ -177,13 +189,13 @@ max_retries = 2
 4. 自动在数据目录下连接并初始化 SQLite 数据库实体，构建播放列表、历史、收藏等表结构。
 5. 在终端中输出代表项目成功引导完成的精美控制台彩蛋：
 
-    ```text
-    ✓ agent-lx-music 初始化配置成功完成！
-      配置文件路径: ~/.config/agent-lx-music/config.toml
-      本地数据根目录: ~/.local/share/agent-lx-music/
- 
-      如何开始您的听歌之旅：
-        alx source add <url>    添加您的自定义音源
-        alx search <keyword>    全网多平台检索歌曲
-        alx play <cli_id>       通过后台守护进程播放音频
-    ```
+   ```text
+   ✓ agent-lx-music 初始化配置成功完成！
+     配置文件路径: ~/.config/agent-lx-music/config.toml
+     本地数据根目录: ~/.local/share/agent-lx-music/
+
+     如何开始您的听歌之旅：
+       alx source add <url>    添加您的自定义音源
+       alx search <keyword>    全网多平台检索歌曲
+       alx play <cli_id>       通过后台守护进程播放音频
+   ```

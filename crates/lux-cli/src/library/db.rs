@@ -34,6 +34,13 @@ pub struct HistoryDbEntry {
     pub played_at: String,
 }
 
+/// Current `PRAGMA user_version` of the database schema (DEF-012/#148).
+///
+/// Bump when introducing a schema change and add a matching migration step
+/// in [`migrate_schema`]; every version below this constant must have an
+/// ordered, forward-only match arm.
+const SCHEMA_VERSION: i32 = 1;
+
 pub fn get_db_conn() -> Result<Connection> {
     let paths = lux_core::config::resolve_paths();
     if let Some(parent) = paths.db_file.parent() {
@@ -42,6 +49,11 @@ pub fn get_db_conn() -> Result<Connection> {
     let conn = Connection::open(&paths.db_file)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    // DEF-010/#146: the schema declares ON DELETE CASCADE on playlist_songs,
+    // but SQLite defaults to foreign_keys=OFF per connection. Enforce it and
+    // surface failures instead of silently degrading referential integrity.
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| anyhow::anyhow!("Failed to enable SQLite foreign_keys pragma: {}", e))?;
     Ok(conn)
 }
 
@@ -201,6 +213,46 @@ pub fn init_db() -> Result<()> {
         [],
     )?;
 
+    // DEF-012/#148: bring the schema up to SCHEMA_VERSION before any data
+    // maintenance runs, stamping fresh and legacy databases alike.
+    migrate_schema(&conn)?;
+
+    // DEF-010/#146: databases written before foreign_keys enforcement may
+    // already hold playlist_songs rows whose playlist is gone. Sweep them at
+    // startup; the statement is idempotent and cheap (indexed playlist_id).
+    conn.execute(
+        "DELETE FROM playlist_songs WHERE playlist_id NOT IN (SELECT id FROM playlists)",
+        [],
+    )?;
+
+    Ok(())
+}
+
+/// Forward-only migration framework over `PRAGMA user_version` (DEF-012/#148).
+///
+/// Applies ordered steps until the stored version reaches
+/// [`SCHEMA_VERSION`]. Version 0 covers both fresh databases (tables just
+/// created above) and legacy installs created before versioning existed:
+/// the `CREATE ... IF NOT EXISTS` statements already brought either shape to
+/// the v1 layout, so the baseline step is a data-preserving stamp only.
+fn migrate_schema(conn: &Connection) -> Result<()> {
+    let stored: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if stored > SCHEMA_VERSION {
+        return Err(anyhow::anyhow!(
+            "Database schema version {} is newer than supported by this build ({})",
+            stored,
+            SCHEMA_VERSION
+        ));
+    }
+    for from in stored..SCHEMA_VERSION {
+        match from {
+            // v0 -> v1: baseline. No ALTERs required yet; headroom for
+            // future steps starts here.
+            0 => {}
+            other => anyhow::bail!("Unhandled schema migration step {}", other),
+        }
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -669,29 +721,74 @@ pub fn get_song_from_cache(song_id: &str, source: &str) -> Result<Option<SearchC
     }
 }
 
+const SONG_BY_CLI_ID_COLUMNS: &str = "SELECT cli_id, song_id, name, singer, source, interval,
+     album_name, album_id, pic_url, songmid, hash, extra FROM search_cache";
+
+fn row_to_search_cache_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchCacheEntry> {
+    Ok(SearchCacheEntry {
+        cli_id: row.get(0)?,
+        song_id: row.get(1)?,
+        name: row.get(2)?,
+        singer: row.get(3)?,
+        source: row.get(4)?,
+        interval: row.get(5)?,
+        album_name: row.get(6)?,
+        album_id: row.get(7)?,
+        pic_url: row.get(8)?,
+        songmid: row.get(9)?,
+        hash: row.get(10)?,
+        extra: row.get(11)?,
+    })
+}
+
+/// Escape SQLite LIKE metacharacters so user-supplied ids match literally.
+fn escape_like_pattern(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
+/// Resolve a cached song from a CLI-facing identifier.
+///
+/// Two identifier styles coexist by design (DEF-011/#147): search caches
+/// md5-hex `cli_id`s (see `cmd/search.rs::generate_cli_id`), while board and
+/// discover surface human-readable `"<source>:<native-id>"` strings. The
+/// lookup therefore tries, in order:
+///
+/// 1. exact equality on `(song_id, source)` for colon-qualified inputs —
+///    this keeps board/discover ids resolvable even when a later search
+///    overwrote the stored `cli_id` of the same `(song_id, source)` row;
+/// 2. the historical prefix `LIKE` over `cli_id`, with `%`, `_` and the
+///    escape character itself neutralised so wildcard input cannot select
+///    arbitrary rows.
 pub fn get_song_by_cli_id(cli_id: &str) -> Result<Option<SearchCacheEntry>> {
     let conn = get_db_conn()?;
-    let mut stmt = conn.prepare(
-        "SELECT cli_id, song_id, name, singer, source, interval, album_name,
-                album_id, pic_url, songmid, hash, extra FROM search_cache
-         WHERE cli_id LIKE ?1",
-    )?;
-    let mut rows = stmt.query(params![format!("{}%", cli_id)])?;
+
+    if let Some((source, song_id)) = cli_id.split_once(':')
+        && !source.is_empty()
+        && !song_id.is_empty()
+    {
+        let mut stmt = conn.prepare(&format!(
+            "{SONG_BY_CLI_ID_COLUMNS} WHERE song_id = ?1 AND source = ?2"
+        ))?;
+        let mut rows = stmt.query(params![song_id, source])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row_to_search_cache_entry(row)?));
+        }
+    }
+
+    let pattern = format!("{}%", escape_like_pattern(cli_id));
+    let mut stmt = conn.prepare(&format!(
+        "{SONG_BY_CLI_ID_COLUMNS} WHERE cli_id LIKE ?1 ESCAPE '\\'"
+    ))?;
+    let mut rows = stmt.query(params![pattern])?;
     if let Some(row) = rows.next()? {
-        Ok(Some(SearchCacheEntry {
-            cli_id: row.get(0)?,
-            song_id: row.get(1)?,
-            name: row.get(2)?,
-            singer: row.get(3)?,
-            source: row.get(4)?,
-            interval: row.get(5)?,
-            album_name: row.get(6)?,
-            album_id: row.get(7)?,
-            pic_url: row.get(8)?,
-            songmid: row.get(9)?,
-            hash: row.get(10)?,
-            extra: row.get(11)?,
-        }))
+        Ok(Some(row_to_search_cache_entry(row)?))
     } else {
         Ok(None)
     }
@@ -1107,16 +1204,334 @@ pub fn list_sources_health() -> Result<Vec<SourceHealthEntry>> {
 mod tests {
     use super::*;
     use std::env;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // All DB tests share the process-wide ALX_HOME env var; serialize them.
+    static DB_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn sandbox_home(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(name);
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        unsafe {
+            env::set_var("ALX_HOME", dir.to_str().unwrap());
+        }
+        dir
+    }
+
+    fn release_sandbox(dir: &PathBuf) {
+        let _ = fs::remove_dir_all(dir);
+        unsafe {
+            env::remove_var("ALX_HOME");
+        }
+    }
+
+    fn sample_entry(cli_id: &str, song_id: &str) -> SearchCacheEntry {
+        SearchCacheEntry {
+            cli_id: cli_id.to_string(),
+            song_id: song_id.to_string(),
+            name: "Test Song".to_string(),
+            singer: "Test Singer".to_string(),
+            source: "wy".to_string(),
+            interval: Some("03:30".to_string()),
+            album_name: Some("Test Album".to_string()),
+            album_id: Some("123".to_string()),
+            pic_url: Some("http://pic.com".to_string()),
+            songmid: Some(song_id.to_string()),
+            hash: None,
+            extra: None,
+        }
+    }
+
+    /// DEF-010/#146: ON DELETE CASCADE must actually fire now that the
+    /// foreign_keys pragma is enabled per connection.
+    #[test]
+    fn test_foreign_keys_cascade_on_playlist_delete() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-fk-cascade");
+
+        init_db().unwrap();
+        create_playlist("Cascade", None).unwrap();
+        let entry = sample_entry("fkcli1", "fksong1");
+        insert_search_cache(&entry).unwrap();
+        add_to_playlist("Cascade", &entry).unwrap();
+
+        let count_before = playlist_song_rows("Cascade");
+        assert_eq!(count_before, 1);
+
+        delete_playlist("Cascade").unwrap();
+        assert_eq!(playlist_song_rows("Cascade"), 0);
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-010/#146: init_db() must sweep orphaned playlist_songs rows left
+    /// behind by older versions that ran with foreign_keys disabled.
+    #[test]
+    fn test_init_db_sweeps_pre_existing_orphans() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-orphan-sweep");
+        let db_file = lux_core::config::resolve_paths().db_file;
+        fs::create_dir_all(db_file.parent().unwrap()).unwrap();
+
+        // Simulate a legacy database: FKs off (raw connection bypasses
+        // get_db_conn and explicitly disables enforcement, matching writers
+        // built against SQLite defaults where foreign_keys starts OFF),
+        // a deleted playlist leaves orphaned song rows behind.
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            raw.pragma_update(None, "foreign_keys", "OFF").unwrap();
+            raw.execute(
+                "CREATE TABLE playlists (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    song_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "CREATE TABLE playlist_songs (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                    song_id     TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    name        TEXT NOT NULL,
+                    singer      TEXT NOT NULL,
+                    album_name  TEXT,
+                    interval    TEXT,
+                    pic_url     TEXT,
+                    position    INTEGER NOT NULL,
+                    added_at    TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "INSERT INTO playlists (name, created_at, updated_at)
+                 VALUES ('Ghost', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+            for pos in 0..2 {
+                raw.execute(
+                    "INSERT INTO playlist_songs (playlist_id, song_id, source, name, singer,
+                        position, added_at)
+                     VALUES ((SELECT id FROM playlists WHERE name = 'Ghost'), ?1, 'wy',
+                        'Orphan Song', 'Orphan Singer', ?2, '2026-01-01T00:00:00+00:00')",
+                    params![format!("orphan{}", pos), pos],
+                )
+                .unwrap();
+            }
+            // FKs are OFF on this raw connection, so this delete leaks rows.
+            raw.execute("DELETE FROM playlists WHERE name = 'Ghost'", [])
+                .unwrap();
+        }
+
+        assert_eq!(orphan_rows(), 2);
+
+        init_db().unwrap();
+        assert_eq!(orphan_rows(), 0);
+        // Idempotent: re-running keeps the library consistent.
+        init_db().unwrap();
+        assert_eq!(orphan_rows(), 0);
+
+        release_sandbox(&dir);
+    }
+
+    fn playlist_song_rows(playlist_name: &str) -> i64 {
+        let conn = get_db_conn().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM playlist_songs
+             WHERE playlist_id = (SELECT id FROM playlists WHERE name = ?1)",
+            params![playlist_name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn orphan_rows() -> i64 {
+        let conn = get_db_conn().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM playlist_songs WHERE playlist_id NOT IN (SELECT id FROM playlists)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// DEF-011/#147: board/discover ids stored verbatim as
+    /// "<source>:<native-id>" resolve exactly and by prefix.
+    #[test]
+    fn test_cli_id_roundtrip_native_style() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-native-style");
+
+        init_db().unwrap();
+        let entry = sample_entry("wy:3778678", "3778678");
+        insert_search_cache(&entry).unwrap();
+
+        let hit = get_song_by_cli_id("wy:3778678").unwrap();
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().name, "Test Song");
+
+        // Prefix semantics are preserved for partial native ids.
+        let partial = get_song_by_cli_id("wy:3778").unwrap();
+        assert!(partial.is_some());
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-011/#147: a "<source>:<native-id>" query must still resolve when
+    /// the stored row carries an md5-hex cli_id written by a later search.
+    #[test]
+    fn test_cli_id_translation_resolves_overwritten_row() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-translation");
+
+        init_db().unwrap();
+        // Same (song_id, source) row, but cli_id is search's md5 style.
+        let entry = sample_entry("a1b2c3d4e5f60718", "456");
+        insert_search_cache(&entry).unwrap();
+
+        assert!(get_song_by_cli_id("wy:456").unwrap().is_some());
+        assert_eq!(
+            get_song_by_cli_id("wy:456").unwrap().unwrap().cli_id,
+            "a1b2c3d4e5f60718"
+        );
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-011/#147: LIKE metacharacters in queried ids must not select
+    /// arbitrary rows.
+    #[test]
+    fn test_cli_id_lookup_escapes_like_wildcards() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-wildcards");
+
+        init_db().unwrap();
+        insert_search_cache(&sample_entry("abc123", "s1")).unwrap();
+        insert_search_cache(&sample_entry("foo_bar", "s2")).unwrap();
+        insert_search_cache(&sample_entry("100%hit", "s3")).unwrap();
+
+        // Bare wildcards match nothing rather than the first random row.
+        assert!(get_song_by_cli_id("%").unwrap().is_none());
+        assert!(get_song_by_cli_id("_").unwrap().is_none());
+        // Underscore/percent inside an id are matched literally only.
+        assert!(get_song_by_cli_id("foo%bar").unwrap().is_none());
+        assert!(get_song_by_cli_id("fooXbar").unwrap().is_none());
+        assert!(get_song_by_cli_id("foo_bar").unwrap().is_some());
+        assert!(get_song_by_cli_id("100%hit").unwrap().is_some());
+        assert!(get_song_by_cli_id("abc123").unwrap().is_some());
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: fresh databases are stamped with the current schema
+    /// version.
+    #[test]
+    fn test_schema_version_stamped_on_fresh_db() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-fresh");
+
+        init_db().unwrap();
+        let conn = get_db_conn().unwrap();
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: a legacy database created before versioning existed is
+    /// stamped to the current version without altering its data.
+    #[test]
+    fn test_legacy_db_is_stamped_and_preserved() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-legacy");
+        let db_file = lux_core::config::resolve_paths().db_file;
+        fs::create_dir_all(db_file.parent().unwrap()).unwrap();
+
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            raw.execute(
+                "CREATE TABLE playlists (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    song_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "INSERT INTO playlists (name, description, song_count, created_at, updated_at)
+                 VALUES ('Legacy', 'kept', 0, '2026-01-01T00:00:00+00:00',
+                    '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        }
+        // No user_version stamped yet (still 0).
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            let version: i32 = raw
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+        }
+
+        init_db().unwrap();
+
+        let conn = get_db_conn().unwrap();
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        // Pre-existing data survived the stamp.
+        let names: Vec<String> = list_playlists()
+            .unwrap()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        assert!(names.contains(&"Legacy".to_string()));
+        // The upgraded database stays functional for writes.
+        create_playlist("AfterMigration", None).unwrap();
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: databases written by a newer build must not be touched.
+    #[test]
+    fn test_newer_schema_version_rejected() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-newer");
+
+        init_db().unwrap();
+        {
+            let raw = Connection::open(lux_core::config::resolve_paths().db_file).unwrap();
+            raw.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+        let err = init_db().unwrap_err();
+        assert!(err.to_string().contains("newer"));
+
+        release_sandbox(&dir);
+    }
 
     #[test]
     fn test_db_all_operations() {
-        let temp_dir = env::temp_dir().join("alx-test-db-all-ops");
-        if temp_dir.exists() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-        }
-        unsafe {
-            env::set_var("ALX_HOME", temp_dir.to_str().unwrap());
-        }
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let temp_dir = sandbox_home("alx-test-db-all-ops");
 
         assert!(init_db().is_ok());
 
@@ -1221,10 +1636,6 @@ mod tests {
         assert!(cached.rlyric.is_none());
         assert!(cached.lxlyric.is_none());
 
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe {
-            env::remove_var("ALX_HOME");
-        }
+        release_sandbox(&temp_dir);
     }
 }

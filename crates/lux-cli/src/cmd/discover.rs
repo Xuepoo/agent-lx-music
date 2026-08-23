@@ -44,6 +44,9 @@ pub async fn run_discover(
     json: bool,
 ) -> Result<()> {
     if let Some(act) = action {
+        // DEF-011/#147: ensure the schema exists so cached rows are actually
+        // persisted instead of failing silently on a fresh database.
+        crate::library::db::init_db()?;
         match act {
             DiscoverAction::Show { playlist_id } => {
                 let tracks = fetch_playlist_tracks(&playlist_id).await?;
