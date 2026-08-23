@@ -23,43 +23,43 @@
 
 `alx` 依赖底层的系统音频输出驱动与高保真解码后端。在编译和运行本项目之前，您需要安装以下外部依赖项：
 
-- **`mpv`** *(核心必须)*：充当 headless 播放解调后端。
-- **`libmpv-dev` (或 `mpv-devel`)** *(编译必须)*：供 Rust 核心原生链接和调用 mpv 进程间套接字。
-- **`alsa-lib` (或 `libasound2-dev`)** *(Linux 必须)*：用于对接底层 ALSA 发声通道。
-- **`beets`** *(可选依赖)*：当您需要将本播放器与本地个人音乐库进行同步管理时使用。
+- **`mpv`** _(核心必须)_：充当 headless 播放解调后端。
+- **`libmpv-dev` (或 `mpv-devel`)** _(编译必须)_：供 Rust 核心原生链接和调用 mpv 进程间套接字。
+- **`alsa-lib` (或 `libasound2-dev`)** _(Linux 必须)_：用于对接底层 ALSA 发声通道。
+- **`beets`** _(可选依赖)_：当您需要将本播放器与本地个人音乐库进行同步管理时使用。
 
 #### 主流操作系统/发行版安装命令一览
 
 - **Debian / Ubuntu / Deepin / Mint**:
 
-    ```bash
-    sudo apt update
-    sudo apt install -y libasound2-dev libmpv-dev mpv beets
-    ```
+  ```bash
+  sudo apt update
+  sudo apt install -y libasound2-dev libmpv-dev mpv beets
+  ```
 
 - **Fedora / RHEL / CentOS**:
 
-    ```bash
-    sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
-    ```
+  ```bash
+  sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
+  ```
 
 - **Arch Linux / Manjaro**:
 
-    ```bash
-    sudo pacman -Sy alsa-lib mpv beets
-    ```
+  ```bash
+  sudo pacman -Sy alsa-lib mpv beets
+  ```
 
 - **Alpine Linux**:
 
-    ```bash
-    apk add alsa-lib-dev mpv-dev mpv beets
-    ```
+  ```bash
+  apk add alsa-lib-dev mpv-dev mpv beets
+  ```
 
 - **macOS (via Homebrew)**:
 
-    ```bash
-    brew install mpv beets
-    ```
+  ```bash
+  brew install mpv beets
+  ```
 
 ---
 
@@ -92,7 +92,7 @@ cargo build --release
 ./target/release/alx --help
 ```
 
-*(注意：您也可以直接前往 GitHub 的 [Releases](https://github.com/Xuepoo/agent-lx-music/releases) 页面，下载开箱即用的预编译二进制或 `.deb` / `.rpm` / `.apk` 安装包。)*
+_(注意：您也可以直接前往 GitHub 的 [Releases](https://github.com/Xuepoo/agent-lx-music/releases) 页面，下载开箱即用的预编译二进制或 `.deb` / `.rpm` / `.apk` 安装包。)_
 
 ---
 
@@ -127,6 +127,26 @@ alx lyric <cli_id>         # 打印同步的 LRC 歌词
 alx lyric <cli_id> --save  # 自动导出为 .lrc 文件到下载文件夹
 alx pic <cli_id> --save    # 下载专辑封面图并自动修正文件后缀
 ```
+
+---
+
+## Agent 智能集成 (MCP)
+
+`v0.4.0` 起内置 stdio MCP 服务器，让任意支持 Model Context Protocol 的 LLM Agent（opencode、Claude Desktop 等）直接以结构化工具驱动播放、检索与曲库管理：
+
+```bash
+alx mcp    # 在 stdin/stdout 上运行 NDJSON MCP 服务器
+```
+
+```json
+{
+  "mcpServers": {
+    "alx": { "command": "alx", "args": ["mcp"] }
+  }
+}
+```
+
+内置 `search` / `play` / `status` / `queue_*` / `playlist_*` / `lyric_get` / `download_*` 等全部 18 个工具，完整契约见 `docs/cli.md`。
 
 ---
 
