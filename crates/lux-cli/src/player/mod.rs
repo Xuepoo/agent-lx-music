@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if, clippy::collapsible_else_if)]
 pub mod ipc;
+pub mod spawn_lock;
 
 use anyhow::{Result, anyhow};
 use serde_json::json;
@@ -110,11 +111,20 @@ impl MpvClient {
     }
 
     pub fn ensure_running(&self) -> Result<()> {
+        // Serialize probe→spawn across processes: two concurrent invocations
+        // must not both unlink/bind/spawn. Hold the lock for the whole
+        // critical section.
+        let _spawn_guard =
+            spawn_lock::SpawnLock::acquire(&self.socket_path.with_extension("lock"))?;
+
+        // Re-probe inside the critical section: another process may have
+        // finished spawning mpv while we waited for the lock.
         if std::os::unix::net::UnixStream::connect(&self.socket_path).is_ok() {
             return Ok(());
         }
 
-        // Clean up stale socket file if it exists
+        // Clean up stale socket file if it exists (safe: nothing can have
+        // freshly bound it while we hold the spawn lock).
         if self.socket_path.exists() {
             let _ = fs::remove_file(&self.socket_path);
         }
