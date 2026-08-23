@@ -185,9 +185,9 @@ jobs:
               echo "::error::Missing artifact file: artifacts/$src"
               exit 1
             fi
-            mkdir -p "npm/platforms/$pkg/bin"
-            cp "artifacts/$src" "npm/platforms/$pkg/bin/$binary_name"
-            chmod +x "npm/platforms/$pkg/bin/$binary_name"
+            mkdir -p ".github/npm/platforms/$pkg/bin"
+            cp "artifacts/$src" ".github/npm/platforms/$pkg/bin/$binary_name"
+            chmod +x ".github/npm/platforms/$pkg/bin/$binary_name"
           done
 
       - name: Sync versions from tag
@@ -199,8 +199,8 @@ jobs:
             const fs = require("fs");
             const version = process.env.CLEAN_VERSION;
             const paths = [
-              "npm/package.json",
-              ...fs.readdirSync("npm/platforms").map((d) => "npm/platforms/" + d + "/package.json"),
+              ".github/npm/package.json",
+              ...fs.readdirSync(".github/npm/platforms").map((d) => ".github/npm/platforms/" + d + "/package.json"),
             ];
             for (const p of paths) {
               const json = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -217,7 +217,7 @@ jobs:
 
       - name: Publish platform packages
         run: |
-          for dir in npm/platforms/*/; do
+          for dir in .github/npm/platforms/*/; do
             pkg=$(basename "$dir")
             echo "Publishing $pkg"
             npm publish --provenance || echo "$pkg already published"
@@ -227,7 +227,7 @@ jobs:
 
       - name: Publish wrapper package
         run: npm publish --provenance || echo "agent-lx-music already published"
-        working-directory: npm
+        working-directory: .github/npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
