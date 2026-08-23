@@ -15,6 +15,31 @@ fn should_write(path_exists: bool, force: bool) -> Result<()> {
     }
 }
 
+/// Cache-miss error for an explicit song ID lookup. Rendered as
+/// `{"error": ...}` on stderr by main when `--json` is active.
+fn missing_song_error(cli_id: &str) -> anyhow::Error {
+    anyhow!(
+        "Song ID '{}' not found in cache. Run a search first.",
+        cli_id
+    )
+}
+
+/// Error for the implicit "currently playing song" lookup finding nothing.
+fn no_active_song_error() -> anyhow::Error {
+    anyhow!("No active song is playing and no song ID was provided.")
+}
+
+/// Load the active song from `<cache_dir>/current.json`, if any.
+///
+/// Accepts either a bare entry object or a `{"song": {...}}` wrapper;
+/// missing, unreadable, or malformed files yield `None`.
+fn read_current_song(cache_dir: &Path) -> Option<SearchCacheEntry> {
+    let content = fs::read_to_string(cache_dir.join("current.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let song_val = value.get("song").unwrap_or(&value);
+    serde_json::from_value::<SearchCacheEntry>(song_val.clone()).ok()
+}
+
 /// Guard against silently clobbering an existing lyrics file.
 ///
 /// The refusal error names the offending path so users can identify it
@@ -66,58 +91,14 @@ pub async fn run(
                     extra: row.get(11)?,
                 }
             } else {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "error": format!("Song ID '{}' not found in cache. Run a search first.", target_id)
-                        })
-                    );
-                    std::process::exit(1);
-                } else {
-                    return Err(anyhow!(
-                        "Song ID '{}' not found in cache. Run a search first.",
-                        target_id
-                    ));
-                }
+                return Err(missing_song_error(target_id));
             }
         }
     } else {
         // Load from current.json
         let paths = lux_core::config::resolve_paths();
-        let current_json_path = paths.cache_dir.join("current.json");
-        let song_opt: Option<SearchCacheEntry> = if current_json_path.exists() {
-            if let Ok(content) = fs::read_to_string(&current_json_path) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(song_val) = val.get("song") {
-                        serde_json::from_value::<SearchCacheEntry>(song_val.clone()).ok()
-                    } else {
-                        serde_json::from_value::<SearchCacheEntry>(val).ok()
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let Some(s) = song_opt else {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "error": "No active song is playing and no song ID was provided."
-                    })
-                );
-                std::process::exit(1);
-            } else {
-                return Err(anyhow!(
-                    "No active song is playing and no song ID was provided."
-                ));
-            }
+        let Some(s) = read_current_song(&paths.cache_dir) else {
+            return Err(no_active_song_error());
         };
         s
     };
@@ -279,6 +260,85 @@ mod tests {
 
         // Explicit --force unlocks the write.
         assert!(ensure_writable(&target, true).is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::{missing_song_error, no_active_song_error, read_current_song};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_test_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "alx-lyric-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    #[test]
+    fn missing_song_error_names_the_id_and_next_step() {
+        let err = missing_song_error("abc123");
+        let msg = err.to_string();
+        assert!(msg.contains("abc123"), "message: {msg}");
+        assert!(msg.contains("not found in cache"), "message: {msg}");
+        assert!(msg.contains("Run a search first"), "message: {msg}");
+    }
+
+    #[test]
+    fn no_active_song_error_has_stable_message() {
+        assert_eq!(
+            no_active_song_error().to_string(),
+            "No active song is playing and no song ID was provided."
+        );
+    }
+
+    #[test]
+    fn read_current_song_returns_none_for_missing_or_invalid_file() {
+        let dir = temp_test_dir("current-missing");
+        fs::create_dir_all(&dir).unwrap();
+
+        assert!(read_current_song(&dir).is_none());
+
+        fs::write(dir.join("current.json"), "not-json{").unwrap();
+        assert!(read_current_song(&dir).is_none());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_current_song_parses_bare_entry_and_song_wrapper() {
+        let dir = temp_test_dir("current-parse");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("current.json");
+
+        let bare = r#"{
+            "cli_id": "c1", "song_id": "s1", "name": "Song", "singer": "Artist",
+            "source": "kw", "interval": "04:12"
+        }"#;
+        fs::write(&path, bare).unwrap();
+        let entry = read_current_song(&dir).expect("bare entry must parse");
+        assert_eq!(entry.cli_id, "c1");
+        assert_eq!(entry.song_id, "s1");
+        assert_eq!(entry.source, "kw");
+
+        fs::write(
+            &path,
+            r#"{"song": {"cli_id": "c2", "song_id": "s2", "name": "N",
+                         "singer": "S", "source": "tx"}}"#,
+        )
+        .unwrap();
+        let wrapped = read_current_song(&dir).expect("wrapped entry must parse");
+        assert_eq!(wrapped.cli_id, "c2");
+        assert_eq!(wrapped.song_id, "s2");
 
         fs::remove_dir_all(&dir).ok();
     }
