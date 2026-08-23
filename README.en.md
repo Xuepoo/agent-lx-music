@@ -23,43 +23,43 @@ A Unix-philosophy CLI music player powered by custom music sources, written in R
 
 `alx` requires underlying system audio drivers and a high-fidelity playback engine. Before compiling or running the project, make sure to install the following prerequisites:
 
-- **`mpv`** *(Core Required)*: Runs in headless daemon mode to stream and decode audio.
-- **`libmpv-dev` (or `mpv-devel`)** *(Compile Required)*: Native C headers for linking Rust's mpv APIs.
-- **`alsa-lib` (or `libasound2-dev`)** *(Linux Required)*: Interface to connect with standard ALSA audio channels.
-- **`beets`** *(Optional)*: Highly recommended if you want to sync, tag, and import metadata from local music libraries.
+- **`mpv`** _(Core Required)_: Runs in headless daemon mode to stream and decode audio.
+- **`libmpv-dev` (or `mpv-devel`)** _(Compile Required)_: Native C headers for linking Rust's mpv APIs.
+- **`alsa-lib` (or `libasound2-dev`)** _(Linux Required)_: Interface to connect with standard ALSA audio channels.
+- **`beets`** _(Optional)_: Highly recommended if you want to sync, tag, and import metadata from local music libraries.
 
 #### Environment Setup Commands
 
 - **Debian / Ubuntu / Mint**:
 
-    ```bash
-    sudo apt update
-    sudo apt install -y libasound2-dev libmpv-dev mpv beets
-    ```
+  ```bash
+  sudo apt update
+  sudo apt install -y libasound2-dev libmpv-dev mpv beets
+  ```
 
 - **Fedora / RHEL / CentOS**:
 
-    ```bash
-    sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
-    ```
+  ```bash
+  sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
+  ```
 
 - **Arch Linux / Manjaro**:
 
-    ```bash
-    sudo pacman -Sy alsa-lib mpv beets
-    ```
+  ```bash
+  sudo pacman -Sy alsa-lib mpv beets
+  ```
 
 - **Alpine Linux**:
 
-    ```bash
-    apk add alsa-lib-dev mpv-dev mpv beets
-    ```
+  ```bash
+  apk add alsa-lib-dev mpv-dev mpv beets
+  ```
 
 - **macOS (via Homebrew)**:
 
-    ```bash
-    brew install mpv beets
-    ```
+  ```bash
+  brew install mpv beets
+  ```
 
 ---
 
@@ -92,7 +92,7 @@ cargo build --release
 ./target/release/alx --help
 ```
 
-*(Note: You can also download pre-built standalone binaries or `.deb` / `.rpm` / `.apk` packages directly from the GitHub [Releases](https://github.com/Xuepoo/agent-lx-music/releases) page.)*
+_(Note: You can also download pre-built standalone binaries or `.deb` / `.rpm` / `.apk` packages directly from the GitHub [Releases](https://github.com/Xuepoo/agent-lx-music/releases) page.)_
 
 ---
 
@@ -127,6 +127,26 @@ alx lyric <cli_id>         # Fetch and print synchronized LRC lyrics
 alx lyric <cli_id> --save  # Export LRC lyric to a local .lrc file in download folder
 alx pic <cli_id> --save    # Download album art with magic bytes file suffix validation
 ```
+
+---
+
+## Agent Integration (MCP)
+
+Since `v0.4.0` a built-in stdio MCP server lets any Model Context Protocol capable LLM agent (opencode, Claude Desktop, etc.) drive playback, search and library management through structured tools:
+
+```bash
+alx mcp    # Serve NDJSON MCP on stdin/stdout
+```
+
+```json
+{
+  "mcpServers": {
+    "alx": { "command": "alx", "args": ["mcp"] }
+  }
+}
+```
+
+Ships all 18 tools (`search`, `play`, `status`, `queue_*`, `playlist_*`, `lyric_get`, `download_*`, ...). Full contract in `docs/cli.md`.
 
 ---
 

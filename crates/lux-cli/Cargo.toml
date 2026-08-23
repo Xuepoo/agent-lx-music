@@ -27,8 +27,8 @@ native-tx = ["lux-native", "lux-native/tx"]
 native-mg = ["lux-native", "lux-native/mg"]
 
 [dependencies]
-lux-core = { path = "../lux-core", version = "0.3.4" }
-lux-native = { path = "../lux-native", version = "0.3.4", optional = true }
+lux-core = { path = "../lux-core", version = "0.4.0" }
+lux-native = { path = "../lux-native", version = "0.4.0", optional = true }
 
 clap = { workspace = true }
 clap_complete = { workspace = true }
