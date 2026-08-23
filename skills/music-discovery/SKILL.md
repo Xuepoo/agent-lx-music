@@ -25,7 +25,7 @@ When a user asks for music based on a mood, activity, or vague description, the 
 ### Query Expansion Table
 
 | User Request | Key Mood / Genre | Search Term Recommendation | Command Example |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | "Play something to help me concentrate" | Lofi / Ambient / Minimalist | "lofi study", "ambient focus", "chillhop" | `alx search "lofi study" --source wy` |
 | "I need high energy gym music" | Synthwave / Hardstyle / Phonk | "phonk workout", "synthwave running", "cyberpunk" | `alx search "phonk workout"` |
 | "Show me classic Chinese rock" | 90s Chinese Rock / Folk | "崔健", "唐朝乐队", "魔岩三杰" | `alx search "崔健"` |
@@ -36,9 +36,11 @@ When a user asks for music based on a mood, activity, or vague description, the 
 ## Search Automation Workflow
 
 ### Workflow 1: Mood-Based Playlist Generation
+
 1. Receive user mood request (e.g. "feeling nostalgic").
 2. Generate 3 distinct related query terms (e.g., "90s classic hits", "retro ballad", "childhood memories").
 3. Perform searches for each, fetch the top 2 IDs from each search, and compile a playlist:
+
 ```bash
 # Create temporary mood playlist
 alx playlist create "Nostalgic Vibe"
@@ -52,7 +54,9 @@ alx playlist play "Nostalgic Vibe" --shuffle
 ```
 
 ### Workflow 2: Platform-Optimized Discovery
+
 Different music platforms excel in different genres. The agent should leverage these strengths:
+
 - **NetEase Music (`wy`)**: Excellent for indie, lofi, electronic, and user-curated playlist matches.
 - **Kuwo (`kw`) / Kugou (`kg`)**: Excellent for high-resolution lossless versions and mainstream Mandarin pop.
 - **Migu (`mg`) / QQ (`tx`)**: Excellent for high-fidelity master cuts and exclusive license songs.
