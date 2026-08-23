@@ -171,18 +171,22 @@ impl MpvClient {
 
         // Auto-mount mpv-mpris if enabled
         if config.player.enable_mpris {
-            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/fuyu"));
-            let mpris_paths = vec![
-                home.join(".config/mpv/scripts/mpris.so"),
-                PathBuf::from("/usr/lib/mpv/scripts/mpris.so"),
-                PathBuf::from("/usr/lib/mpv/mpris.so"),
-                PathBuf::from("/usr/lib/mpv-mpris/mpris.so"),
-                PathBuf::from("/usr/lib/x86_64-linux-gnu/mpv/scripts/mpris.so"),
-            ];
-            for path in mpris_paths {
-                if path.exists() {
-                    cmd.arg(format!("--script={}", path.display()));
-                    break;
+            // Without a resolvable home directory the user-config script
+            // location is unknown; skip auto-mount entirely rather than
+            // guessing a hardcoded path.
+            if let Some(home) = dirs::home_dir() {
+                let mpris_paths = vec![
+                    home.join(".config/mpv/scripts/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv/scripts/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv/mpris.so"),
+                    PathBuf::from("/usr/lib/mpv-mpris/mpris.so"),
+                    PathBuf::from("/usr/lib/x86_64-linux-gnu/mpv/scripts/mpris.so"),
+                ];
+                for path in mpris_paths {
+                    if path.exists() {
+                        cmd.arg(format!("--script={}", path.display()));
+                        break;
+                    }
                 }
             }
         }
