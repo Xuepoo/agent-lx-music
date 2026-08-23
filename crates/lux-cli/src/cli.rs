@@ -72,7 +72,7 @@ pub enum Commands {
             help = "Song IDs, URLs or local file paths"
         )]
         id_or_url: Vec<String>,
-        #[arg(short, long, help = "Override audio quality")]
+        #[arg(short = 'Q', long, help = "Override audio quality")]
         quality: Option<String>,
         #[arg(long, help = "Load entire playlist into queue")]
         from_playlist: Option<String>,
@@ -300,7 +300,7 @@ pub enum DownloadAction {
             help = "CLI ID(s) of the song(s) from search results"
         )]
         ids: Vec<String>,
-        #[arg(short, long, help = "Override audio quality")]
+        #[arg(short = 'Q', long, help = "Override audio quality")]
         quality: Option<String>,
         #[arg(
             short,
@@ -363,7 +363,7 @@ pub enum PlaylistAction {
         name: Option<String>,
         #[arg(long, help = "Download all matched songs immediately")]
         download: bool,
-        #[arg(short, long, help = "Request specific high-res quality matching")]
+        #[arg(short = 'Q', long, help = "Request specific high-res quality matching")]
         quality: Option<String>,
     },
     /// Export playlist to universal file formats
@@ -473,5 +473,11 @@ mod tests {
         assert!(try_parse(&["lyric", "--translate", "--romaji"]).is_err());
         assert!(try_parse(&["lyric", "-t"]).is_ok());
         assert!(try_parse(&["lyric", "-r"]).is_ok());
+    }
+
+    #[test]
+    fn full_command_tree_passes_clap_debug_asserts() {
+        use clap::CommandFactory as _;
+        Cli::command().build();
     }
 }
