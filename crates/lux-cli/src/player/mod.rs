@@ -191,16 +191,35 @@ impl MpvClient {
             cmd.arg(arg);
         }
 
-        // Redirect stdout/stderr to a log file to allow inspection of background execution issues
+        // Redirect stdout/stderr to a log file to allow inspection of
+        // background execution issues; fall back to /dev/null when the cache
+        // directory is unwritable — a missing log must not abort playback.
         let paths = lux_core::config::resolve_paths();
         let log_path = paths.cache_dir.join("mpv.log");
-        let log_file = fs::OpenOptions::new()
+        let (log_file, err_file) = match fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&log_path)
-            .unwrap();
-        let err_file = log_file.try_clone().unwrap();
+        {
+            Ok(file) => match file.try_clone() {
+                Ok(err) => (file.into(), err.into()),
+                Err(e) => {
+                    eprintln!(
+                        "warning: cannot duplicate mpv log file {}: {e}",
+                        log_path.display()
+                    );
+                    (std::process::Stdio::null(), std::process::Stdio::null())
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot open mpv log file {}: {e}",
+                    log_path.display()
+                );
+                (std::process::Stdio::null(), std::process::Stdio::null())
+            }
+        };
 
         cmd.stdout(log_file)
             .stderr(err_file)
