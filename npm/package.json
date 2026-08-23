@@ -1,0 +1,38 @@
+{
+  "name": "agent-lx-music",
+  "version": "0.3.4",
+  "description": "Terminal-native music CLI powered by mpv and QuickJS source scripts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xuepoo/agent-lx-music.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Xuepoo/agent-lx-music/issues"
+  },
+  "homepage": "https://github.com/Xuepoo/agent-lx-music#readme",
+  "keywords": [
+    "music",
+    "cli",
+    "player",
+    "terminal",
+    "mpv",
+    "lx-music"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "alx": "bin/alx.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "optionalDependencies": {
+    "agent-lx-music-linux-x64-gnu": "0.3.4",
+    "agent-lx-music-linux-arm64-gnu": "0.3.4",
+    "agent-lx-music-darwin-x64": "0.3.4",
+    "agent-lx-music-darwin-arm64": "0.3.4",
+    "agent-lx-music-win32-x64": "0.3.4"
+  }
+}

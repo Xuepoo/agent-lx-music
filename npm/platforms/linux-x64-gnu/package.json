@@ -1,0 +1,26 @@
+{
+  "name": "agent-lx-music-linux-x64-gnu",
+  "version": "0.3.4",
+  "description": "Terminal-native music CLI binary for x86_64-unknown-linux-gnu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xuepoo/agent-lx-music.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Xuepoo/agent-lx-music/issues"
+  },
+  "homepage": "https://github.com/Xuepoo/agent-lx-music#readme",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "bin"
+  ]
+}
