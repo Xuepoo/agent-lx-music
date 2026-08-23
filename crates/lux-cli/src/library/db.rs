@@ -562,6 +562,13 @@ pub struct PlaybackState {
     pub updated_at: String,
 }
 
+/// Insert or replace a cached search result.
+///
+/// `OR REPLACE` is intentional: rows are keyed by `cli_id`, so re-searching
+/// the same song refreshes metadata instead of duplicating it. Since DEF-009
+/// the ID is 16 hex chars (64-bit MD5 prefix, see `search::generate_cli_id`),
+/// making accidental replacement of an unrelated song negligible; no schema
+/// migration is needed (`cli_id` is TEXT).
 pub fn insert_search_cache(entry: &SearchCacheEntry) -> Result<()> {
     let conn = get_db_conn()?;
     let now = chrono::Local::now().to_rfc3339();
