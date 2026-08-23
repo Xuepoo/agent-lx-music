@@ -17,11 +17,16 @@ use flate2::write::ZlibEncoder;
 use md5::Digest;
 use ring::rand::{SecureRandom, SystemRandom};
 use rquickjs::function::{MutFn, Rest};
-use rquickjs::{Array, ArrayBuffer, Ctx, Function, Object, Value};
+use rquickjs::{Array, ArrayBuffer, Ctx, Exception, Function, Object, Value};
 use rsa::{BigUint, Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+
+/// Maximum size accepted by `lx.utils.crypto.randomBytes`.
+const MAX_RANDOM_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum decompressed output accepted from `lx.utils.zlib.inflate`.
+const MAX_INFLATE_OUTPUT: usize = 64 * 1024 * 1024;
 
 pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result<()> {
     // Inject regenerator polyfill to support ES6+ async/await generator scripts
@@ -369,13 +374,29 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     vec![]
                 };
 
-                // Attempt Zlib decompression first, fallback to Gzip
+                // Attempt Zlib decompression first, fallback to Gzip. Both
+                // paths read at most MAX_INFLATE_OUTPUT + 1 bytes so a bomb
+                // cannot make us allocate without bound.
                 let mut decoded = Vec::new();
                 let mut decoder = ZlibDecoder::new(&bytes[..]);
-                if decoder.read_to_end(&mut decoded).is_err() {
+                let zlib_ok = decoder
+                    .by_ref()
+                    .take(MAX_INFLATE_OUTPUT as u64 + 1)
+                    .read_to_end(&mut decoded)
+                    .is_ok();
+                if !zlib_ok {
                     decoded.clear();
                     let mut gz = GzDecoder::new(&bytes[..]);
-                    let _ = gz.read_to_end(&mut decoded);
+                    let _ = gz
+                        .by_ref()
+                        .take(MAX_INFLATE_OUTPUT as u64 + 1)
+                        .read_to_end(&mut decoded);
+                }
+                if decoded.len() > MAX_INFLATE_OUTPUT {
+                    return Err(Exception::throw_range(
+                        &ctx,
+                        &format!("inflate output exceeds maximum of {MAX_INFLATE_OUTPUT} bytes"),
+                    ));
                 }
 
                 let array_buffer = ArrayBuffer::new(ctx.clone(), decoded)?;
@@ -447,6 +468,12 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                 } else {
                     args[0].as_int().unwrap_or(0) as usize
                 };
+                if size > MAX_RANDOM_BYTES {
+                    return Err(Exception::throw_range(
+                        &ctx,
+                        &format!("randomBytes size exceeds maximum of {MAX_RANDOM_BYTES} bytes"),
+                    ));
+                }
                 let mut bytes = vec![0u8; size];
                 let rand = SystemRandom::new();
                 let _ = rand.fill(&mut bytes);
@@ -954,5 +981,73 @@ mod tests {
                 "round-trip failed for len {len}"
             );
         }
+    }
+
+    fn hex_of(data: &[u8]) -> String {
+        data.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Evaluate a JS expression with the full `lx` bridge injected; the
+    /// expression must evaluate to a string.
+    fn eval_with_lx(script: &str) -> Result<String> {
+        let sandbox = crate::source::runtime::JsSandbox::new()?;
+        let context = sandbox.context.as_ref().unwrap();
+        context.with(|ctx| -> Result<String> {
+            inject_lx(&ctx, Arc::new(Mutex::new(SandboxState::default())))?;
+            let value: Value = ctx.eval(script)?;
+            let s = value
+                .as_string()
+                .ok_or_else(|| anyhow!("script did not return a string"))?
+                .to_string()?;
+            Ok(s)
+        })
+    }
+
+    #[test]
+    fn random_bytes_returns_requested_length() {
+        let out = eval_with_lx(
+            "(function(){ var b = lx.utils.crypto.randomBytes(1024); return 'len:' + b.byteLength; })()",
+        )
+        .unwrap();
+        assert_eq!(out, "len:1024");
+    }
+
+    #[test]
+    fn random_bytes_over_cap_throws_range_error() {
+        let out = eval_with_lx(
+            "(function(){ try { lx.utils.crypto.randomBytes(64 * 1024 * 1024 + 1); return 'no-error'; } catch (e) { return e.name + ':' + e.message; } })()",
+        )
+        .unwrap();
+        assert!(out.starts_with("RangeError:"), "got: {out}");
+        assert!(out.contains("exceeds"), "got: {out}");
+    }
+
+    #[test]
+    fn inflate_small_payload_roundtrip() {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(b"hello world").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let out = eval_with_lx(&format!(
+            "(function(){{ var b = lx.utils.zlib.inflate(lx.utils.buffer.from('{}', 'hex')); return lx.utils.buffer.bufToString(b); }})()",
+            hex_of(&compressed)
+        ))
+        .unwrap();
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn inflate_over_cap_errors_instead_of_unbounded_read() {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![0u8; 64 * 1024 * 1024 + 1]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let out = eval_with_lx(&format!(
+            "(function(){{ try {{ lx.utils.zlib.inflate(lx.utils.buffer.from('{}', 'hex')); return 'no-error'; }} catch (e) {{ return e.name + ':' + e.message; }} }})()",
+            hex_of(&compressed)
+        ))
+        .unwrap();
+        assert!(out.starts_with("RangeError:"), "got: {out}");
+        assert!(out.contains("exceeds"), "got: {out}");
     }
 }

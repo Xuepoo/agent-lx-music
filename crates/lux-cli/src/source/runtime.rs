@@ -8,6 +8,11 @@ use std::sync::{Arc, Mutex};
 /// it are interrupted via the QuickJS interrupt handler.
 pub const SCRIPT_DEADLINE_SECS: u64 = 30;
 
+/// QuickJS heap ceiling per sandbox instance. Runaway allocations inside a
+/// source script fail with an out-of-memory error instead of exhausting the
+/// host process.
+pub const MAX_HEAP_BYTES: usize = 256 * 1024 * 1024;
+
 /// Upper bound on pending microtask jobs drained per execution. Protects
 /// against endless promise chains that would otherwise spin the event loop.
 const MAX_PENDING_JOBS: u32 = 100_000;
@@ -50,6 +55,7 @@ impl JsSandbox {
 
     fn build(deadline_secs: u64) -> Result<Self> {
         let runtime = Runtime::new()?;
+        runtime.set_memory_limit(MAX_HEAP_BYTES);
         let context = Context::full(&runtime)?;
         let deadline_ms = Arc::new(AtomicU64::new(0));
         let deadline = deadline_ms.clone();
@@ -739,5 +745,28 @@ mod tests {
         "#;
         let val2 = sandbox.execute_init(script2).unwrap();
         assert_eq!(val2.pointer("/status").unwrap(), &serde_json::json!(false));
+    }
+}
+
+#[cfg(test)]
+mod resource_limit_tests {
+    use super::*;
+
+    #[test]
+    fn heap_limit_stops_runaway_allocation() {
+        let sandbox = JsSandbox::with_deadline(10).unwrap();
+        let err = sandbox
+            .execute_init(
+                r#"
+                var chunks = [];
+                while (true) { chunks.push(new ArrayBuffer(1024 * 1024)); }
+            "#,
+            )
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            !msg.contains("timed out"),
+            "hit deadline instead of memory limit: {msg}"
+        );
     }
 }
