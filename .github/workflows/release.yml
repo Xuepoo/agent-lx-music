@@ -223,6 +223,8 @@ jobs:
             if ! out=$(cd "$dir" && npm publish --provenance --access public 2>&1); then
               if echo "$out" | grep -q "previously published"; then
                 echo "$pkg already published"
+              elif echo "$out" | grep -qi "spam detection"; then
+                echo "::warning::$pkg blocked by npm spam detection - skipping (tracked in #184)"
               else
                 echo "$out"
                 exit 1
