@@ -530,6 +530,10 @@ impl MpvClient {
         }
     }
 
+    pub fn try_ensure_running(&self) -> Result<()> {
+        Err(anyhow!("Player is not supported on this platform"))
+    }
+
     pub fn ensure_running(&self) -> Result<()> {
         Err(anyhow!("Player is not supported on this platform"))
     }
