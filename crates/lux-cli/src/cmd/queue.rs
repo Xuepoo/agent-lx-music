@@ -191,7 +191,18 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
             }
         }
         QueueAction::Insert { ids } => {
-            let current_idx = client.get_playing_index().unwrap_or(Some(0)).unwrap_or(0);
+            // Inserting happens after the currently playing song; without a
+            // known playing position there is no anchor, so fail explicitly
+            // instead of silently assuming index 0.
+            let current_idx = match client.get_playing_index() {
+                Ok(Some(idx)) => idx,
+                Ok(None) => {
+                    return Err(anyhow!(
+                        "Nothing is playing; start playback or use 'alx queue add' to append instead."
+                    ));
+                }
+                Err(e) => return Err(e),
+            };
             let mut inserted_songs = Vec::new();
             let mut target_pos = current_idx + 1;
 

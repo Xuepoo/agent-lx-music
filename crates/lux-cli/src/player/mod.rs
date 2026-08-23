@@ -467,11 +467,7 @@ impl MpvClient {
             &self.socket_path,
             vec![json!("get_property"), json!("playlist-playing-pos")],
         )?;
-        if val.is_null() {
-            return Ok(None);
-        }
-        let idx = val.as_i64().map(|v| v as usize);
-        Ok(idx)
+        Ok(normalize_playing_index(val))
     }
 
     pub fn next(&self) -> Result<()> {
@@ -587,10 +583,40 @@ pub fn describe_skip_error(direction: &str, err: &anyhow::Error) -> String {
     }
 }
 
+/// Map an mpv `playlist-playing-pos` response to a queue position.
+///
+/// `null` (no playlist) and negative values (idle: `-1`) mean "nothing is
+/// playing" — never saturate to index 0.
+fn normalize_playing_index(val: serde_json::Value) -> Option<usize> {
+    val.as_i64()
+        .filter(|v| *v >= 0)
+        .and_then(|v| usize::try_from(v).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::describe_skip_error;
+    use super::normalize_playing_index;
     use anyhow::anyhow;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn idle_negative_position_maps_to_none() {
+        assert_eq!(normalize_playing_index(json!(-1)), None);
+    }
+
+    #[test]
+    fn absent_property_maps_to_none() {
+        assert_eq!(normalize_playing_index(Value::Null), None);
+        assert_eq!(normalize_playing_index(json!("nonsense")), None);
+        assert_eq!(normalize_playing_index(json!(3.7)), None);
+    }
+
+    #[test]
+    fn valid_positions_pass_through() {
+        assert_eq!(normalize_playing_index(json!(0)), Some(0));
+        assert_eq!(normalize_playing_index(json!(42)), Some(42));
+    }
 
     #[test]
     fn boundary_errors_map_to_end_of_queue() {
