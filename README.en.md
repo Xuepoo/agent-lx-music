@@ -54,7 +54,20 @@ A Unix-philosophy CLI music player powered by custom music sources, written in R
 
 ---
 
-### 2. Clone & Build from Source
+### 2. Install via npm / bun (Prebuilt Binary)
+
+Skip local compilation and pull a ready-to-run prebuilt binary straight from the npm registry (external `mpv` is still required):
+
+```bash
+npm install -g agent-lx-music
+bun add -g agent-lx-music
+```
+
+Supported platforms: Linux x64/arm64 (glibc), macOS x64/arm64, Windows x64. For anything else, use `cargo install agent-lx-music` or build from source below.
+
+---
+
+### 3. Clone & Build from Source
 
 Once the system dependencies are installed, you can clone and build the binary:
 
@@ -73,7 +86,7 @@ cargo build --release
 
 ---
 
-### 3. Bootstrap Playback in 3 Steps
+### 4. Bootstrap Playback in 3 Steps
 
 ```bash
 # Step 1: Add a custom JS platform source scraper

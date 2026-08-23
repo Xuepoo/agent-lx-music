@@ -54,7 +54,20 @@
 
 ---
 
-### 2. 获取并本地编译 (Build from Source)
+### 2. 使用 npm / bun 安装预编译版本 (Prebuilt Binary)
+
+无需本地编译，直接从 npm 仓库安装开箱即用的预编译二进制（外部 `mpv` 仍需提前安装）：
+
+```bash
+npm install -g agent-lx-music
+bun add -g agent-lx-music
+```
+
+支持平台：Linux x64/arm64 (glibc)、macOS x64/arm64、Windows x64；其他系统请使用 `cargo install agent-lx-music` 或参照下节自行编译。
+
+---
+
+### 3. 获取并本地编译 (Build from Source)
 
 环境依赖安装就绪后，直接克隆并编译本项目：
 
@@ -73,7 +86,7 @@ cargo build --release
 
 ---
 
-### 3. 三步极速配置开歌 (Bootstrap)
+### 4. 三步极速配置开歌 (Bootstrap)
 
 ```bash
 # 第一步：获取并注册一个自定义的外部解析源脚本

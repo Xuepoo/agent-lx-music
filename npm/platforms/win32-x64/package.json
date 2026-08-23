@@ -1,0 +1,23 @@
+{
+  "name": "agent-lx-music-win32-x64",
+  "version": "0.3.4",
+  "description": "Terminal-native music CLI binary for x86_64-pc-windows-msvc",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xuepoo/agent-lx-music.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Xuepoo/agent-lx-music/issues"
+  },
+  "homepage": "https://github.com/Xuepoo/agent-lx-music#readme",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin"
+  ]
+}
