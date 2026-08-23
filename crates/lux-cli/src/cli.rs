@@ -187,6 +187,8 @@ pub enum Commands {
         romanized: bool,
         #[arg(short, long, help = "Save lyrics to .lrc file in download directory")]
         save: bool,
+        #[arg(long, help = "Overwrite existing lyrics files when saving")]
+        force: bool,
     },
 
     /// Show or download cover art for a song

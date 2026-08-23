@@ -3,12 +3,37 @@ use crate::source::SourceManager;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 use std::fs;
+use std::path::Path;
+
+/// Pure overwrite policy: a save may proceed when the target does not
+/// exist yet or an explicit `--force` was given.
+fn should_write(path_exists: bool, force: bool) -> Result<()> {
+    if !path_exists || force {
+        Ok(())
+    } else {
+        Err(anyhow!("target lyrics file already exists"))
+    }
+}
+
+/// Guard against silently clobbering an existing lyrics file.
+///
+/// The refusal error names the offending path so users can identify it
+/// without re-running with debug output.
+fn ensure_writable(target: &Path, force: bool) -> Result<()> {
+    should_write(target.exists(), force).map_err(|_| {
+        anyhow!(
+            "Refusing to overwrite existing file '{}' (use --force to overwrite)",
+            target.display()
+        )
+    })
+}
 
 pub async fn run(
     id: Option<String>,
     translated: bool,
     romanized: bool,
     save: bool,
+    force: bool,
     json: bool,
 ) -> Result<()> {
     crate::library::db::init_db()?;
@@ -160,6 +185,8 @@ pub async fn run(
         let final_filename = format!("{}{}.lrc", final_name, suffix);
         let final_path = output_dir.join(&final_filename);
 
+        ensure_writable(&final_path, force)?;
+
         fs::write(&final_path, content_to_print)?;
 
         if json {
@@ -201,4 +228,58 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_writable, should_write};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn temp_test_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "alx-lyric-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    #[test]
+    fn should_write_allows_new_target() {
+        assert!(should_write(false, false).is_ok());
+    }
+
+    #[test]
+    fn should_write_only_allows_existing_target_when_forced() {
+        assert!(should_write(true, false).is_err());
+        assert!(should_write(true, true).is_ok());
+        assert!(should_write(false, true).is_ok());
+    }
+
+    #[test]
+    fn save_refuses_existing_lrc_without_force_and_keeps_content() {
+        let dir = temp_test_dir("save-guard");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("Artist - Song.lrc");
+        fs::write(&target, "[00:01.00]old").unwrap();
+
+        let err = ensure_writable(&target, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Refusing to overwrite"), "message: {msg}");
+        assert!(
+            msg.contains(target.to_string_lossy().as_ref()),
+            "message must name the file: {msg}"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "[00:01.00]old");
+
+        // Explicit --force unlocks the write.
+        assert!(ensure_writable(&target, true).is_ok());
+
+        fs::remove_dir_all(&dir).ok();
+    }
 }

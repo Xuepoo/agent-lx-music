@@ -321,8 +321,9 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             translated,
             romanized,
             save,
+            force,
         } => {
-            lyric::run(id, translated, romanized, save, json).await?;
+            lyric::run(id, translated, romanized, save, force, json).await?;
         }
         Commands::Pic { id, save, output } => {
             pic::run(id, save, output, json).await?;
