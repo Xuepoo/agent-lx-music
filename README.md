@@ -23,31 +23,40 @@
 
 `alx` 依赖底层的系统音频输出驱动与高保真解码后端。在编译和运行本项目之前，您需要安装以下外部依赖项：
 
-*   **`mpv`** *(核心必须)*：充当 headless 播放解调后端。
-*   **`libmpv-dev` (或 `mpv-devel`)** *(编译必须)*：供 Rust 核心原生链接和调用 mpv 进程间套接字。
-*   **`alsa-lib` (或 `libasound2-dev`)** *(Linux 必须)*：用于对接底层 ALSA 发声通道。
-*   **`beets`** *(可选依赖)*：当您需要将本播放器与本地个人音乐库进行同步管理时使用。
+- **`mpv`** *(核心必须)*：充当 headless 播放解调后端。
+- **`libmpv-dev` (或 `mpv-devel`)** *(编译必须)*：供 Rust 核心原生链接和调用 mpv 进程间套接字。
+- **`alsa-lib` (或 `libasound2-dev`)** *(Linux 必须)*：用于对接底层 ALSA 发声通道。
+- **`beets`** *(可选依赖)*：当您需要将本播放器与本地个人音乐库进行同步管理时使用。
 
-#### 主流操作系统/发行版安装命令一览：
+#### 主流操作系统/发行版安装命令一览
 
-*   **Debian / Ubuntu / Deepin / Mint**:
+- **Debian / Ubuntu / Deepin / Mint**:
+
     ```bash
     sudo apt update
     sudo apt install -y libasound2-dev libmpv-dev mpv beets
     ```
-*   **Fedora / RHEL / CentOS**:
+
+- **Fedora / RHEL / CentOS**:
+
     ```bash
     sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
     ```
-*   **Arch Linux / Manjaro**:
+
+- **Arch Linux / Manjaro**:
+
     ```bash
     sudo pacman -Sy alsa-lib mpv beets
     ```
-*   **Alpine Linux**:
+
+- **Alpine Linux**:
+
     ```bash
     apk add alsa-lib-dev mpv-dev mpv beets
     ```
-*   **macOS (via Homebrew)**:
+
+- **macOS (via Homebrew)**:
+
     ```bash
     brew install mpv beets
     ```
@@ -82,6 +91,7 @@ cargo build --release
 # 3. 查看全局使用菜单
 ./target/release/alx --help
 ```
+
 *(注意：您也可以直接前往 GitHub 的 [Releases](https://github.com/Xuepoo/agent-lx-music/releases) 页面，下载开箱即用的预编译二进制或 `.deb` / `.rpm` / `.apk` 安装包。)*
 
 ---
@@ -123,6 +133,7 @@ alx pic <cli_id> --save    # 下载专辑封面图并自动修正文件后缀
 ## 技术文档导览
 
 本项目的全部核心设计细节、参数及数据持久化模型，均存放于 `docs/` 目录中：
+
 - [CLI 使用手册](docs/cli.md) — 每一个子命令与全局选项的配置与用法说明
 - [音源桥接 API 规范](docs/source-api.md) — 沙箱隔离环境内音源事件的回调契约
 - [XDG 路径配置指南](docs/config.md) — 环境变量优先级与路径解析规则
@@ -135,4 +146,5 @@ alx pic <cli_id> --save    # 下载专辑封面图并自动修正文件后缀
 本项目基于 MIT 许可证开源。
 
 ### 免责声明与补充协议
+
 请务必阅读并签署 [项目协议与免责声明](docs/disclaimer.zh-cn.md) 了解关于第三方音乐源使用限制、版权数据处理（24小时内清空）、非商业探索性质及技术学习交流的具体协议条款。

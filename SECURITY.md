@@ -30,6 +30,7 @@ Instead, report it privately via
 ## Dependency Security
 
 We use:
+
 - **cargo-deny** in CI to audit dependencies for known vulnerabilities
 - **Dependabot** for automated dependency update PRs
 - **Docker Scout** (via Docker Hub) for container image scanning

@@ -2,11 +2,12 @@
 
 This project is distributed under the **MIT** license. The following agreement is a supplement to the MIT license. In case of any conflict, this agreement shall prevail.
 
-### Definitions
-*   **"This Project"**: Refers to the `agent-lx-music` (`alx`) music terminal application.
-*   **"User"**: Refers to any individual or entity signing or implicitly accepting this agreement by using the application.
-*   **"Official Music Platforms"**: A collective term for the official music providers supported or built-in, including but not limited to Kuwo, Kugou, Migu, etc.
-*   **"Copyrighted Data"**: Refers to data owned by third parties, including but not limited to images, audio, titles, and artist details.
+## Definitions
+
+* **"This Project"**: Refers to the `agent-lx-music` (`alx`) music terminal application.
+* **"User"**: Refers to any individual or entity signing or implicitly accepting this agreement by using the application.
+* **"Official Music Platforms"**: A collective term for the official music providers supported or built-in, including but not limited to Kuwo, Kugou, Migu, etc.
+* **"Copyrighted Data"**: Refers to data owned by third parties, including but not limited to images, audio, titles, and artist details.
 
 ---
 

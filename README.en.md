@@ -23,31 +23,40 @@ A Unix-philosophy CLI music player powered by custom music sources, written in R
 
 `alx` requires underlying system audio drivers and a high-fidelity playback engine. Before compiling or running the project, make sure to install the following prerequisites:
 
-*   **`mpv`** *(Core Required)*: Runs in headless daemon mode to stream and decode audio.
-*   **`libmpv-dev` (or `mpv-devel`)** *(Compile Required)*: Native C headers for linking Rust's mpv APIs.
-*   **`alsa-lib` (or `libasound2-dev`)** *(Linux Required)*: Interface to connect with standard ALSA audio channels.
-*   **`beets`** *(Optional)*: Highly recommended if you want to sync, tag, and import metadata from local music libraries.
+- **`mpv`** *(Core Required)*: Runs in headless daemon mode to stream and decode audio.
+- **`libmpv-dev` (or `mpv-devel`)** *(Compile Required)*: Native C headers for linking Rust's mpv APIs.
+- **`alsa-lib` (or `libasound2-dev`)** *(Linux Required)*: Interface to connect with standard ALSA audio channels.
+- **`beets`** *(Optional)*: Highly recommended if you want to sync, tag, and import metadata from local music libraries.
 
-#### Environment Setup Commands:
+#### Environment Setup Commands
 
-*   **Debian / Ubuntu / Mint**:
+- **Debian / Ubuntu / Mint**:
+
     ```bash
     sudo apt update
     sudo apt install -y libasound2-dev libmpv-dev mpv beets
     ```
-*   **Fedora / RHEL / CentOS**:
+
+- **Fedora / RHEL / CentOS**:
+
     ```bash
     sudo dnf install -y alsa-lib-devel mpv-devel mpv beets
     ```
-*   **Arch Linux / Manjaro**:
+
+- **Arch Linux / Manjaro**:
+
     ```bash
     sudo pacman -Sy alsa-lib mpv beets
     ```
-*   **Alpine Linux**:
+
+- **Alpine Linux**:
+
     ```bash
     apk add alsa-lib-dev mpv-dev mpv beets
     ```
-*   **macOS (via Homebrew)**:
+
+- **macOS (via Homebrew)**:
+
     ```bash
     brew install mpv beets
     ```
@@ -82,6 +91,7 @@ cargo build --release
 # 3. View global options and command list
 ./target/release/alx --help
 ```
+
 *(Note: You can also download pre-built standalone binaries or `.deb` / `.rpm` / `.apk` packages directly from the GitHub [Releases](https://github.com/Xuepoo/agent-lx-music/releases) page.)*
 
 ---
@@ -123,6 +133,7 @@ alx pic <cli_id> --save    # Download album art with magic bytes file suffix val
 ## Documentation
 
 All architectural specs, command options, and data schemas are documented in detail inside the `docs/` directory:
+
 - [CLI Reference Manual](docs/cli.md) — Detailed subcommand descriptions and global flags
 - [Source Bridge API](docs/source-api.md) — JavaScript bridge execution contracts inside isolated sandboxes
 - [XDG Path Configuration](docs/config.md) — Environment variables, default directories, and resolving rules
@@ -135,4 +146,5 @@ All architectural specs, command options, and data schemas are documented in det
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ### Disclaimer & Supplementary Agreement
+
 Please read our [Project Agreement & Disclaimer](docs/disclaimer.md) for terms of use, third-party source guidelines, copyright compliance, and non-commercial exploration rules.

@@ -7,7 +7,32 @@ development workflow and quality standards for this project.
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable, edition 2024)
 - [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (dependency auditing)
-- [pre-commit](https://pre-commit.com/) (optional, for local hooks)
+- [lefthook](https://lefthook.dev/) (local Git hooks)
+- [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) (Markdown linting)
+
+## Git Hooks
+
+Hooks are managed by [lefthook](https://lefthook.dev/) via `.lefthook.yml`.
+After cloning, activate them once:
+
+```bash
+lefthook install
+```
+
+What runs when:
+
+| Hook         | Trigger            | Commands                                                                               |
+| ------------ | ------------------ | -------------------------------------------------------------------------------------- |
+| `pre-commit` | staged `.rs` files | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-features -- -D warnings` |
+| `pre-commit` | staged `.md` files | `markdownlint-cli2 <staged files>`                                                     |
+| `pre-push`   | every push         | `cargo check`, `cargo test --workspace --all-features`                                 |
+
+The pre-commit hooks run in parallel. To run them manually against all
+files without committing:
+
+```bash
+lefthook run pre-commit --all-files
+```
 
 ## Development Setup
 
@@ -40,16 +65,16 @@ cargo deny check
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):
 
-| Prefix     | Usage                          |
-|------------|--------------------------------|
-| `feat:`    | New feature                    |
-| `fix:`     | Bug fix                        |
-| `docs:`    | Documentation only             |
-| `refactor:`| Code change (no feature/fix)   |
-| `test:`    | Adding or updating tests       |
-| `ci:`      | CI/CD changes                  |
-| `deps:`    | Dependency updates             |
-| `chore:`   | Maintenance tasks              |
+| Prefix      | Usage                        |
+| ----------- | ---------------------------- |
+| `feat:`     | New feature                  |
+| `fix:`      | Bug fix                      |
+| `docs:`     | Documentation only           |
+| `refactor:` | Code change (no feature/fix) |
+| `test:`     | Adding or updating tests     |
+| `ci:`       | CI/CD changes                |
+| `deps:`     | Dependency updates           |
+| `chore:`    | Maintenance tasks            |
 
 ## Pull Request Process
 
@@ -69,6 +94,7 @@ Releases are automated via CI. When a version tag (`v*`) is pushed:
 4. Crates.io, Docker Hub, AUR, Homebrew, and Scoop are updated
 
 To create a release:
+
 ```bash
 # Bump version in Cargo.toml
 cargo release patch  # or minor, major
