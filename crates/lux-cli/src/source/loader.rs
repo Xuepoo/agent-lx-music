@@ -63,7 +63,11 @@ pub fn add_source_script(path_or_url: &str) -> Result<()> {
         tokio::task::block_in_place(|| {
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async {
-                let resp = reqwest::get(path_or_url).await?;
+                let client = crate::cmd::download::http_client_builder(
+                    crate::cmd::download::http_timeout(None),
+                )
+                .build()?;
+                let resp = client.get(path_or_url).send().await?;
                 resp.text().await
             })
         })?

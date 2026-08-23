@@ -23,7 +23,7 @@ impl MusicSource for KuwoSource {
         limit: usize,
     ) -> Result<SearchResult, SourceError> {
         let url = "http://search.kuwo.cn/r.s";
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(url)
             .query(&[
@@ -133,7 +133,7 @@ impl MusicSource for KuwoSource {
             "http://mobile.kuwo.cn/mpage/html5/songinfoandlrc?mid={}&flag=0",
             song_id
         );
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()
@@ -171,7 +171,7 @@ impl MusicSource for KuwoSource {
             "http://artistpic.kuwo.cn/pic.web?type=ect_music&rid={}&size=500",
             song_id
         );
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()

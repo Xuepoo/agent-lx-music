@@ -16,6 +16,33 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
+/// Connect-phase timeout applied to all ad-hoc CLI HTTP clients.
+pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Fallback total request timeout when no configured value is available.
+pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
+
+/// Resolve the effective total request timeout from an optional configured
+/// value (seconds, e.g. `config.download.timeout`).
+///
+/// `None` or zero falls back to [`DEFAULT_HTTP_TIMEOUT_SECS`] so requests can
+/// never run unbounded.
+pub fn http_timeout(configured: Option<u64>) -> Duration {
+    match configured {
+        Some(secs) if secs > 0 => Duration::from_secs(secs),
+        _ => Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
+    }
+}
+
+/// Pre-configured reqwest client builder with a bounded connect phase and a
+/// total timeout. Callers may still layer extra options (e.g. user agent)
+/// before calling `.build()`.
+pub fn http_client_builder(total_timeout: Duration) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(total_timeout)
+}
+
 #[derive(tabled::Tabled)]
 struct DownloadStatusTableEntry {
     #[tabled(rename = "ID")]
@@ -743,5 +770,23 @@ mod tests {
         let long_title = "a".repeat(200);
         let cleaned_long = sanitize_filename(&long_title);
         assert_eq!(cleaned_long.chars().count(), 180);
+    }
+
+    #[test]
+    fn test_http_timeout_uses_configured_value() {
+        assert_eq!(http_timeout(Some(45)), Duration::from_secs(45));
+        assert_eq!(http_timeout(Some(1)), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_http_timeout_falls_back_on_none_and_zero() {
+        assert_eq!(
+            http_timeout(None),
+            Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            http_timeout(Some(0)),
+            Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS)
+        );
     }
 }

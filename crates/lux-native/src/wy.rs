@@ -25,7 +25,7 @@ impl MusicSource for NetEaseSource {
         let offset = (page - 1) * limit;
         let url = "http://music.163.com/api/search/get/web";
 
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(url)
             .query(&[
@@ -102,7 +102,7 @@ impl MusicSource for NetEaseSource {
 
     async fn get_lyric(&self, song_id: &str) -> Result<Option<LyricInfo>, SourceError> {
         let url = format!("http://music.163.com/api/song/media?id={}", song_id);
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()
@@ -131,7 +131,7 @@ impl MusicSource for NetEaseSource {
             "http://music.163.com/api/song/detail/?id={}&ids=[{}]",
             song_id, song_id
         );
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()

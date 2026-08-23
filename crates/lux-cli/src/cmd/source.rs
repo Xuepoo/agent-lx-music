@@ -131,7 +131,11 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
         }
         SourceAction::Update { id, all } => {
             crate::library::db::init_db()?;
-            let client = reqwest::Client::new();
+            let config = lux_core::config::Config::load().unwrap_or_default();
+            let client = crate::cmd::download::http_client_builder(
+                crate::cmd::download::http_timeout(Some(config.download.timeout)),
+            )
+            .build()?;
 
             let targets = if all {
                 list_sources()?
