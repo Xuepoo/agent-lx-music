@@ -1,6 +1,6 @@
 use crate::cli::SourceAction;
 use crate::library::db::{delete_source, get_source, list_sources, update_source_script};
-use crate::source::loader::add_source_script;
+use crate::source::loader::{add_source_script, apply_validated_update};
 use crate::source::runtime::JsSandbox;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
@@ -131,7 +131,11 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
         }
         SourceAction::Update { id, all } => {
             crate::library::db::init_db()?;
-            let client = reqwest::Client::new();
+            let config = lux_core::config::Config::load().unwrap_or_default();
+            let client = crate::cmd::download::http_client_builder(
+                crate::cmd::download::http_timeout(Some(config.download.timeout)),
+            )
+            .build()?;
 
             let targets = if all {
                 list_sources()?
@@ -148,6 +152,7 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
             };
 
             let mut updated_count = 0;
+            let mut rejected_count = 0;
 
             for entry in targets {
                 let Some(url) = entry.source_url.clone() else {
@@ -178,9 +183,24 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
                             continue;
                         }
 
-                        // Write to disk
-                        let _ = fs::write(&entry.script_path, &new_script);
-                        // Update DB
+                        // Validation gate: never overwrite an installed script
+                        // with a body that fails metadata/sandbox validation.
+                        if let Err(validation_err) =
+                            apply_validated_update(Path::new(&entry.script_path), &new_script)
+                        {
+                            rejected_count += 1;
+                            if !json {
+                                eprintln!(
+                                    "{} Source '{}' update rejected: {}",
+                                    "✗".red().bold(),
+                                    entry.id,
+                                    validation_err
+                                );
+                            }
+                            continue;
+                        }
+
+                        // Update DB only after the validated write succeeded
                         let now = chrono::Local::now().to_rfc3339();
                         update_source_script(&entry.id, &new_hash, &now)?;
                         updated_count += 1;
@@ -204,8 +224,15 @@ pub async fn run(action: SourceAction, json: bool) -> Result<()> {
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({ "status": "updated", "count": updated_count })
+                    serde_json::json!({ "status": "updated", "count": updated_count, "rejected": rejected_count })
                 );
+            }
+
+            if rejected_count > 0 {
+                return Err(anyhow!(
+                    "{} source update(s) failed validation and were rejected; installed scripts kept unchanged",
+                    rejected_count
+                ));
             }
         }
         SourceAction::Test {

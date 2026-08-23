@@ -1,3 +1,5 @@
+pub mod http;
+
 #[cfg(feature = "kg")]
 pub mod kg;
 #[cfg(feature = "kw")]

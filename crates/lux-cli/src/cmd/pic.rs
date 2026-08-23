@@ -127,9 +127,11 @@ pub async fn run(id: Option<String>, save: bool, output: Option<String>, json: b
     }
 
     if save {
-        let client = reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()?;
+        let client = crate::cmd::download::http_client_builder(
+            crate::cmd::download::http_timeout(None),
+        )
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()?;
 
         let resp = client.get(url).send().await?;
         if !resp.status().is_success() {

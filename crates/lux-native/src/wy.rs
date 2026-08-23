@@ -6,6 +6,12 @@ use lux_core::types::{MusicInfo, Quality, SearchResult, Source};
 #[derive(Default)]
 pub struct NetEaseSource;
 
+/// Compute the list offset for a 1-based page number. Page 0 (or any
+/// underflowing value) saturates to the first page instead of wrapping around.
+fn search_offset(page: usize, limit: usize) -> usize {
+    page.saturating_sub(1) * limit
+}
+
 #[async_trait]
 impl MusicSource for NetEaseSource {
     fn platform(&self) -> Source {
@@ -22,10 +28,10 @@ impl MusicSource for NetEaseSource {
         page: usize,
         limit: usize,
     ) -> Result<SearchResult, SourceError> {
-        let offset = (page - 1) * limit;
+        let offset = search_offset(page, limit);
         let url = "http://music.163.com/api/search/get/web";
 
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(url)
             .query(&[
@@ -102,7 +108,7 @@ impl MusicSource for NetEaseSource {
 
     async fn get_lyric(&self, song_id: &str) -> Result<Option<LyricInfo>, SourceError> {
         let url = format!("http://music.163.com/api/song/media?id={}", song_id);
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()
@@ -131,7 +137,7 @@ impl MusicSource for NetEaseSource {
             "http://music.163.com/api/song/detail/?id={}&ids=[{}]",
             song_id, song_id
         );
-        let client = reqwest::Client::new();
+        let client = crate::http::client();
         let resp = client
             .get(&url)
             .send()
@@ -151,5 +157,24 @@ impl MusicSource for NetEaseSource {
             return Ok(Some(pic_url.to_string()));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_offset;
+
+    #[test]
+    fn test_search_offset_first_pages() {
+        assert_eq!(search_offset(1, 30), 0);
+        assert_eq!(search_offset(2, 30), 30);
+        assert_eq!(search_offset(3, 30), 60);
+    }
+
+    #[test]
+    fn test_search_offset_page_zero_saturates() {
+        // page=0 must not wrap around to a garbage offset
+        assert_eq!(search_offset(0, 30), 0);
+        assert_eq!(search_offset(0, 100), 0);
     }
 }
