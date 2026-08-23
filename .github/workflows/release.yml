@@ -220,7 +220,7 @@ jobs:
           for dir in .github/npm/platforms/*/; do
             pkg=$(basename "$dir")
             echo "Publishing $pkg"
-            if ! out=$(cd "$dir" && npm publish --provenance 2>&1); then
+            if ! out=$(cd "$dir" && npm publish --provenance --access public 2>&1); then
               if echo "$out" | grep -q "previously published"; then
                 echo "$pkg already published"
               else
@@ -235,7 +235,7 @@ jobs:
       - name: Publish wrapper package
         working-directory: .github/npm
         run: |
-          if ! out=$(npm publish --provenance 2>&1); then
+          if ! out=$(npm publish --provenance --access public 2>&1); then
             if echo "$out" | grep -q "previously published"; then
               echo "agent-lx-music already published"
             else
