@@ -68,10 +68,11 @@ pub enum Commands {
     Play {
         #[arg(
             required_unless_present = "from_playlist",
+            conflicts_with = "from_playlist",
             help = "Song IDs, URLs or local file paths"
         )]
         id_or_url: Vec<String>,
-        #[arg(short, long, help = "Override audio quality")]
+        #[arg(short = 'Q', long, help = "Override audio quality")]
         quality: Option<String>,
         #[arg(long, help = "Load entire playlist into queue")]
         from_playlist: Option<String>,
@@ -181,12 +182,19 @@ pub enum Commands {
             help = "CLI ID or platform song ID of the song (defaults to currently playing song)"
         )]
         id: Option<String>,
-        #[arg(short, long, help = "Display translated lyrics")]
+        #[arg(
+            short,
+            long,
+            conflicts_with = "romanized",
+            help = "Display translated lyrics"
+        )]
         translated: bool,
         #[arg(short, long, help = "Display romanized lyrics")]
         romanized: bool,
         #[arg(short, long, help = "Save lyrics to .lrc file in download directory")]
         save: bool,
+        #[arg(long, help = "Overwrite existing lyrics files when saving")]
+        force: bool,
     },
 
     /// Show or download cover art for a song
@@ -292,7 +300,7 @@ pub enum DownloadAction {
             help = "CLI ID(s) of the song(s) from search results"
         )]
         ids: Vec<String>,
-        #[arg(short, long, help = "Override audio quality")]
+        #[arg(short = 'Q', long, help = "Override audio quality")]
         quality: Option<String>,
         #[arg(
             short,
@@ -355,7 +363,7 @@ pub enum PlaylistAction {
         name: Option<String>,
         #[arg(long, help = "Download all matched songs immediately")]
         download: bool,
-        #[arg(short, long, help = "Request specific high-res quality matching")]
+        #[arg(short = 'Q', long, help = "Request specific high-res quality matching")]
         quality: Option<String>,
     },
     /// Export playlist to universal file formats
@@ -440,4 +448,36 @@ pub enum DiscoverAction {
         #[arg(required = true, help = "Curated playlist ID")]
         playlist_id: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cli::Cli;
+    use clap::Parser;
+
+    fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("alx").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn play_rejects_ids_combined_with_from_playlist() {
+        assert!(try_parse(&["play", "12345", "--from-playlist", "fav"]).is_err());
+        assert!(try_parse(&["play", "--from-playlist", "fav"]).is_ok());
+        assert!(try_parse(&["play", "12345"]).is_ok());
+        assert!(try_parse(&["play", "a", "b"]).is_ok());
+    }
+
+    #[test]
+    fn lyric_translated_and_romanized_are_mutually_exclusive() {
+        assert!(try_parse(&["lyric", "-t", "-r"]).is_err());
+        assert!(try_parse(&["lyric", "--translate", "--romaji"]).is_err());
+        assert!(try_parse(&["lyric", "-t"]).is_ok());
+        assert!(try_parse(&["lyric", "-r"]).is_ok());
+    }
+
+    #[test]
+    fn full_command_tree_passes_clap_debug_asserts() {
+        use clap::CommandFactory as _;
+        Cli::command().build();
+    }
 }
