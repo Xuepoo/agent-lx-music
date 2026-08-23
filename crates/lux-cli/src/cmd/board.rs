@@ -126,6 +126,10 @@ pub async fn run_board(
 
     let tracks_limit: Vec<TrackDetail> = tracks.into_iter().take(30).collect();
 
+    // DEF-011/#147: ensure the schema exists so cached rows are actually
+    // persisted instead of failing silently on a fresh database.
+    crate::library::db::init_db()?;
+
     let mut cache_entries = Vec::new();
     for track in &tracks_limit {
         let cli_id = format!("wy:{}", track.id);

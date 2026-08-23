@@ -682,29 +682,74 @@ pub fn get_song_from_cache(song_id: &str, source: &str) -> Result<Option<SearchC
     }
 }
 
+const SONG_BY_CLI_ID_COLUMNS: &str = "SELECT cli_id, song_id, name, singer, source, interval,
+     album_name, album_id, pic_url, songmid, hash, extra FROM search_cache";
+
+fn row_to_search_cache_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchCacheEntry> {
+    Ok(SearchCacheEntry {
+        cli_id: row.get(0)?,
+        song_id: row.get(1)?,
+        name: row.get(2)?,
+        singer: row.get(3)?,
+        source: row.get(4)?,
+        interval: row.get(5)?,
+        album_name: row.get(6)?,
+        album_id: row.get(7)?,
+        pic_url: row.get(8)?,
+        songmid: row.get(9)?,
+        hash: row.get(10)?,
+        extra: row.get(11)?,
+    })
+}
+
+/// Escape SQLite LIKE metacharacters so user-supplied ids match literally.
+fn escape_like_pattern(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
+/// Resolve a cached song from a CLI-facing identifier.
+///
+/// Two identifier styles coexist by design (DEF-011/#147): search caches
+/// md5-hex `cli_id`s (see `cmd/search.rs::generate_cli_id`), while board and
+/// discover surface human-readable `"<source>:<native-id>"` strings. The
+/// lookup therefore tries, in order:
+///
+/// 1. exact equality on `(song_id, source)` for colon-qualified inputs —
+///    this keeps board/discover ids resolvable even when a later search
+///    overwrote the stored `cli_id` of the same `(song_id, source)` row;
+/// 2. the historical prefix `LIKE` over `cli_id`, with `%`, `_` and the
+///    escape character itself neutralised so wildcard input cannot select
+///    arbitrary rows.
 pub fn get_song_by_cli_id(cli_id: &str) -> Result<Option<SearchCacheEntry>> {
     let conn = get_db_conn()?;
-    let mut stmt = conn.prepare(
-        "SELECT cli_id, song_id, name, singer, source, interval, album_name,
-                album_id, pic_url, songmid, hash, extra FROM search_cache
-         WHERE cli_id LIKE ?1",
-    )?;
-    let mut rows = stmt.query(params![format!("{}%", cli_id)])?;
+
+    if let Some((source, song_id)) = cli_id.split_once(':')
+        && !source.is_empty()
+        && !song_id.is_empty()
+    {
+        let mut stmt = conn.prepare(&format!(
+            "{SONG_BY_CLI_ID_COLUMNS} WHERE song_id = ?1 AND source = ?2"
+        ))?;
+        let mut rows = stmt.query(params![song_id, source])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row_to_search_cache_entry(row)?));
+        }
+    }
+
+    let pattern = format!("{}%", escape_like_pattern(cli_id));
+    let mut stmt = conn.prepare(&format!(
+        "{SONG_BY_CLI_ID_COLUMNS} WHERE cli_id LIKE ?1 ESCAPE '\\'"
+    ))?;
+    let mut rows = stmt.query(params![pattern])?;
     if let Some(row) = rows.next()? {
-        Ok(Some(SearchCacheEntry {
-            cli_id: row.get(0)?,
-            song_id: row.get(1)?,
-            name: row.get(2)?,
-            singer: row.get(3)?,
-            source: row.get(4)?,
-            interval: row.get(5)?,
-            album_name: row.get(6)?,
-            album_id: row.get(7)?,
-            pic_url: row.get(8)?,
-            songmid: row.get(9)?,
-            hash: row.get(10)?,
-            extra: row.get(11)?,
-        }))
+        Ok(Some(row_to_search_cache_entry(row)?))
     } else {
         Ok(None)
     }
@@ -1279,6 +1324,74 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    /// DEF-011/#147: board/discover ids stored verbatim as
+    /// "<source>:<native-id>" resolve exactly and by prefix.
+    #[test]
+    fn test_cli_id_roundtrip_native_style() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-native-style");
+
+        init_db().unwrap();
+        let entry = sample_entry("wy:3778678", "3778678");
+        insert_search_cache(&entry).unwrap();
+
+        let hit = get_song_by_cli_id("wy:3778678").unwrap();
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().name, "Test Song");
+
+        // Prefix semantics are preserved for partial native ids.
+        let partial = get_song_by_cli_id("wy:3778").unwrap();
+        assert!(partial.is_some());
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-011/#147: a "<source>:<native-id>" query must still resolve when
+    /// the stored row carries an md5-hex cli_id written by a later search.
+    #[test]
+    fn test_cli_id_translation_resolves_overwritten_row() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-translation");
+
+        init_db().unwrap();
+        // Same (song_id, source) row, but cli_id is search's md5 style.
+        let entry = sample_entry("a1b2c3d4e5f60718", "456");
+        insert_search_cache(&entry).unwrap();
+
+        assert!(get_song_by_cli_id("wy:456").unwrap().is_some());
+        assert_eq!(
+            get_song_by_cli_id("wy:456").unwrap().unwrap().cli_id,
+            "a1b2c3d4e5f60718"
+        );
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-011/#147: LIKE metacharacters in queried ids must not select
+    /// arbitrary rows.
+    #[test]
+    fn test_cli_id_lookup_escapes_like_wildcards() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-cli-wildcards");
+
+        init_db().unwrap();
+        insert_search_cache(&sample_entry("abc123", "s1")).unwrap();
+        insert_search_cache(&sample_entry("foo_bar", "s2")).unwrap();
+        insert_search_cache(&sample_entry("100%hit", "s3")).unwrap();
+
+        // Bare wildcards match nothing rather than the first random row.
+        assert!(get_song_by_cli_id("%").unwrap().is_none());
+        assert!(get_song_by_cli_id("_").unwrap().is_none());
+        // Underscore/percent inside an id are matched literally only.
+        assert!(get_song_by_cli_id("foo%bar").unwrap().is_none());
+        assert!(get_song_by_cli_id("fooXbar").unwrap().is_none());
+        assert!(get_song_by_cli_id("foo_bar").unwrap().is_some());
+        assert!(get_song_by_cli_id("100%hit").unwrap().is_some());
+        assert!(get_song_by_cli_id("abc123").unwrap().is_some());
+
+        release_sandbox(&dir);
     }
 
     #[test]
