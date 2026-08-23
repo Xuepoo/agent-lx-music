@@ -20,6 +20,34 @@ use anyhow::{Result, anyhow};
 use colored::Colorize;
 use rand::seq::SliceRandom;
 
+/// Parse a volume adjustment argument into an integer delta.
+///
+/// Accepts an optional leading sign (`+10`, `-5`) followed by an integer
+/// magnitude; unsigned values parse as non-negative deltas. Callers route
+/// signed results through the relative-volume path and keep absolute
+/// values on the dedicated `u8` path.
+///
+/// Time/space complexity: O(1) / O(1).
+pub(crate) fn parse_volume_delta(value: &str) -> Result<i32> {
+    let trimmed = value.trim();
+    let (sign, digits): (i32, &str) = if let Some(rest) = trimmed.strip_prefix('+') {
+        (1, rest)
+    } else if let Some(rest) = trimmed.strip_prefix('-') {
+        (-1, rest)
+    } else {
+        (1, trimmed)
+    };
+    // Reject sign-stacking (`++3`) and any non-digit payload outright;
+    // only a bare integer magnitude may follow the optional sign.
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(anyhow!("invalid volume adjustment '{value}'"));
+    }
+    let magnitude: i32 = digits
+        .parse()
+        .map_err(|_| anyhow!("invalid volume adjustment '{value}'"))?;
+    Ok(sign * magnitude)
+}
+
 pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
     match command {
         Commands::Config { action } => {
@@ -104,8 +132,8 @@ pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
             let client = crate::player::MpvClient::new();
             if let Some(val) = value {
                 if val.starts_with('+') || val.starts_with('-') {
+                    let diff = parse_volume_delta(&val)?;
                     let current = client.get_volume().unwrap_or(80);
-                    let diff: i32 = val.parse().unwrap_or(0);
                     let new_vol = (current as i32 + diff).clamp(0, 100) as u8;
                     client.set_volume(new_vol)?;
                     if !json {
@@ -407,6 +435,22 @@ mod tests {
         }
         assert_eq!(local, desired, "local bookkeeping must reach desired order");
         assert_eq!(mpv, desired, "mpv commands must land mpv at the same order");
+    }
+
+    #[test]
+    fn parse_volume_delta_accepts_signed_and_plain_integers() {
+        assert_eq!(super::parse_volume_delta("+10").unwrap(), 10);
+        assert_eq!(super::parse_volume_delta("-10").unwrap(), -10);
+        assert_eq!(super::parse_volume_delta("0").unwrap(), 0);
+        assert_eq!(super::parse_volume_delta("+7").unwrap(), 7);
+    }
+
+    #[test]
+    fn parse_volume_delta_rejects_non_numeric_adjustments() {
+        for bad in ["+abc", "-xyz", "abc", "", "+", "-", "++3"] {
+            let err = super::parse_volume_delta(bad).unwrap_err().to_string();
+            assert!(err.contains("invalid volume adjustment"), "{bad}: {err}");
+        }
     }
 
     #[test]

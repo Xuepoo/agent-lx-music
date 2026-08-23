@@ -68,6 +68,7 @@ pub enum Commands {
     Play {
         #[arg(
             required_unless_present = "from_playlist",
+            conflicts_with = "from_playlist",
             help = "Song IDs, URLs or local file paths"
         )]
         id_or_url: Vec<String>,
@@ -181,7 +182,12 @@ pub enum Commands {
             help = "CLI ID or platform song ID of the song (defaults to currently playing song)"
         )]
         id: Option<String>,
-        #[arg(short, long, help = "Display translated lyrics")]
+        #[arg(
+            short,
+            long,
+            conflicts_with = "romanized",
+            help = "Display translated lyrics"
+        )]
         translated: bool,
         #[arg(short, long, help = "Display romanized lyrics")]
         romanized: bool,
@@ -442,4 +448,30 @@ pub enum DiscoverAction {
         #[arg(required = true, help = "Curated playlist ID")]
         playlist_id: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cli::Cli;
+    use clap::Parser;
+
+    fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("alx").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn play_rejects_ids_combined_with_from_playlist() {
+        assert!(try_parse(&["play", "12345", "--from-playlist", "fav"]).is_err());
+        assert!(try_parse(&["play", "--from-playlist", "fav"]).is_ok());
+        assert!(try_parse(&["play", "12345"]).is_ok());
+        assert!(try_parse(&["play", "a", "b"]).is_ok());
+    }
+
+    #[test]
+    fn lyric_translated_and_romanized_are_mutually_exclusive() {
+        assert!(try_parse(&["lyric", "-t", "-r"]).is_err());
+        assert!(try_parse(&["lyric", "--translate", "--romaji"]).is_err());
+        assert!(try_parse(&["lyric", "-t"]).is_ok());
+        assert!(try_parse(&["lyric", "-r"]).is_ok());
+    }
 }
