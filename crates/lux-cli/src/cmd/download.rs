@@ -10,7 +10,7 @@ use metaflac::Tag as FlacTag;
 use metaflac::block::PictureType as FlacPictureType;
 use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -284,36 +284,69 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Whether `pid` refers to a live `alx` download daemon.
+///
+/// On Linux the process identity is verified against procfs: the PID is only
+/// accepted when `/proc/<pid>/comm` (or, as fallback, the basename of the
+/// `/proc/<pid>/exe` symlink) is exactly `alx` or starts with `alx`. A
+/// recycled PID owned by any other program therefore counts as dead. Where
+/// `proc_dir` itself is absent (macOS/Windows have no procfs) identity cannot
+/// be verified and every parseable PID is assumed alive.
+///
+/// `proc_dir` is a parameter seam so tests can inject a fake `/proc` tree.
+pub(crate) fn pid_is_live_daemon(pid: u32, proc_dir: &Path) -> bool {
+    if !proc_dir.is_dir() {
+        return true;
+    }
+    let entry = proc_dir.join(pid.to_string());
+    if let Ok(comm) = fs::read_to_string(entry.join("comm")) {
+        return process_name_is_alx(comm.trim());
+    }
+    if let Ok(exe) = fs::read_link(entry.join("exe")) {
+        if let Some(name) = exe.file_name() {
+            return process_name_is_alx(&name.to_string_lossy());
+        }
+    }
+    false
+}
+
+fn process_name_is_alx(name: &str) -> bool {
+    name.starts_with("alx")
+}
+
+/// Whether the pidfile points at a live `alx` daemon. Missing, unreadable,
+/// unparsable or identity-mismatched pidfiles all count as not running.
+pub(crate) fn daemon_pid_alive(pid_file: &Path, proc_dir: &Path) -> bool {
+    fs::read_to_string(pid_file)
+        .ok()
+        .and_then(|content| content.trim().parse::<u32>().ok())
+        .map(|pid| pid_is_live_daemon(pid, proc_dir))
+        .unwrap_or(false)
+}
+
 pub fn ensure_daemon_running() -> Result<()> {
     let paths = lux_core::config::resolve_paths();
     let pid_file = paths.cache_dir.join("download.pid");
+    let proc_dir = Path::new("/proc");
 
-    let need_spawn = if pid_file.exists() {
-        if let Ok(pid_str) = fs::read_to_string(&pid_file) {
-            if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                // Check if pid is running in system (using kill(pid, 0) logic or standard command)
-                let status = Command::new("kill")
-                    .arg("-0")
-                    .arg(pid.to_string())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
-                if let Ok(exit_status) = status {
-                    !exit_status.success()
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            true
-        }
-    } else {
-        true
-    };
+    if daemon_pid_alive(&pid_file, proc_dir) {
+        return Ok(());
+    }
 
-    if need_spawn {
+    // Serialize the stale-pidfile removal + spawn across concurrent CLI
+    // processes (O_EXCL sentinel lock, same pattern as the mpv spawn lock):
+    // without it two invocations can both observe a dead daemon and spawn
+    // duplicates racing over `reset_downloading_to_pending()` and `.part`
+    // writes.
+    let lock_path = paths.cache_dir.join("download-daemon.lock");
+    let _spawn_guard = crate::player::spawn_lock::SpawnLock::acquire(&lock_path)?;
+
+    // Double-check under the lock: a competing process may have respawned
+    // the daemon while we waited for it.
+    if !daemon_pid_alive(&pid_file, proc_dir) {
+        // Stale or forged pidfile: remove before respawning so the new
+        // daemon owns the file exclusively.
+        let _ = fs::remove_file(&pid_file);
         let exe = std::env::current_exe()?;
         let _child = Command::new(exe)
             .arg("download")
@@ -788,5 +821,103 @@ mod tests {
             http_timeout(Some(0)),
             Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS)
         );
+    }
+
+    /// Build a fake procfs tree: `<root>/<pid>/comm` entries plus an
+    /// optional `/exe` symlink (symlinks require Unix).
+    fn fake_proc_dir(tag: &str, pids: &[(&u32, &str)]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("alx-test-proc-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for (pid, comm) in pids {
+            let dir = root.join(pid.to_string());
+            fs::create_dir_all(&dir).expect("create fake proc entry");
+            fs::write(dir.join("comm"), format!("{comm}\n")).expect("write fake comm");
+        }
+        root
+    }
+
+    #[test]
+    fn test_pid_identity_accepts_alx_comm() {
+        let pid = 4242u32;
+        let proc_dir = fake_proc_dir("accept", &[(&pid, "alx")]);
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+        // Prefix match also accepted (e.g. threaded/renamed binaries).
+        fs::write(proc_dir.join("4242").join("comm"), "alx-daemon\n").unwrap();
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_pid_identity_rejects_foreign_and_absent() {
+        let foreign = 1111u32;
+        let ghost = 2222u32;
+        let proc_dir = fake_proc_dir("reject", &[(&foreign, "mpv")]);
+        // Recycled PID now owned by another program counts as dead.
+        assert!(!pid_is_live_daemon(foreign, &proc_dir));
+        // Absent /proc/<pid> entry counts as dead.
+        assert!(!pid_is_live_daemon(ghost, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pid_identity_falls_back_to_exe_basename() {
+        use std::os::unix::fs::symlink;
+
+        let pid = 5150u32;
+        let proc_dir = fake_proc_dir("exe", &[(&pid, "")]);
+        let entry = proc_dir.join("5150");
+        fs::remove_file(entry.join("comm")).unwrap();
+        let target = proc_dir.join("alx-worker");
+        fs::write(&target, b"elf").unwrap();
+        symlink(&target, entry.join("exe")).unwrap();
+        assert!(pid_is_live_daemon(pid, &proc_dir));
+
+        fs::remove_file(entry.join("exe")).unwrap();
+        symlink(proc_dir.join("other-program"), entry.join("exe")).unwrap();
+        assert!(!pid_is_live_daemon(pid, &proc_dir));
+        let _ = fs::remove_dir_all(&proc_dir);
+    }
+
+    #[test]
+    fn test_pid_identity_assumes_alive_without_procfs() {
+        // No procfs on this platform: identity cannot be verified.
+        assert!(pid_is_live_daemon(
+            9999,
+            &PathBuf::from("/nonexistent-proc-dir")
+        ));
+    }
+
+    #[test]
+    fn test_daemon_pid_alive_parses_pidfile() {
+        let base = std::env::temp_dir().join(format!("alx-test-pidfile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let pid_file = base.join("download.pid");
+
+        // Missing pidfile -> not alive.
+        assert!(!daemon_pid_alive(
+            &pid_file,
+            &PathBuf::from("/nonexistent-proc")
+        ));
+
+        // Unparsable content -> not alive.
+        fs::write(&pid_file, "not-a-pid\n").unwrap();
+        assert!(!daemon_pid_alive(
+            &pid_file,
+            &PathBuf::from("/nonexistent-proc")
+        ));
+
+        let live = 7331u32;
+        let proc_dir = fake_proc_dir("pidfile", &[(&live, "alx")]);
+        fs::write(&pid_file, format!("{live}\n")).unwrap();
+        assert!(daemon_pid_alive(&pid_file, &proc_dir));
+
+        // Live PID but foreign process -> stale.
+        fs::write(&pid_file, format!("{}\n", 8675u32)).unwrap();
+        assert!(!daemon_pid_alive(&pid_file, &proc_dir));
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&proc_dir);
     }
 }
