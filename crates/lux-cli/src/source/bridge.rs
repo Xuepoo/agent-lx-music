@@ -442,22 +442,36 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
     // lx.utils.crypto
     let crypto = Object::new(ctx.clone())?;
 
-    // md5(string)
+    // md5(string | ArrayBuffer)
     let md5_fn = Function::new(
         ctx.clone(),
-        MutFn::new(move |args: Rest<Value<'js>>| -> rquickjs::Result<String> {
-            let text = if args.is_empty() {
-                String::new()
-            } else {
-                args[0]
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
-                    .unwrap_or_default()
-            };
-            let mut hasher = md5::Md5::new();
-            hasher.update(text.as_bytes());
-            Ok(hex::encode(hasher.finalize()))
-        }),
+        MutFn::new(
+            move |ctx: Ctx<'js>, args: Rest<Value<'js>>| -> rquickjs::Result<String> {
+                let bytes = if args.is_empty() {
+                    Vec::new()
+                } else if let Some(s) = args[0].as_string() {
+                    s.to_string().map_err(|e| throw_err(&ctx, e))?.into_bytes()
+                } else if let Some(obj) = args[0].as_object() {
+                    match ArrayBuffer::from_object(obj.clone()) {
+                        Some(arr_buf) => arr_buf.as_bytes().unwrap_or_default().to_vec(),
+                        None => {
+                            return Err(Exception::throw_type(
+                                &ctx,
+                                "md5 requires a string or ArrayBuffer argument",
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "md5 requires a string or ArrayBuffer argument",
+                    ));
+                };
+                let mut hasher = md5::Md5::new();
+                hasher.update(&bytes);
+                Ok(hex::encode(hasher.finalize()))
+            },
+        ),
     )?;
     crypto.set("md5", md5_fn)?;
 
@@ -1168,5 +1182,38 @@ mod tests {
             .find(|&i| block[i] == 0)
             .expect("v1.5 separator");
         assert_eq!(&block[sep + 1..], b"hello");
+    }
+    #[test]
+    fn md5_string_input_matches_known_vector() {
+        let out = eval_with_lx("(function(){ return lx.utils.crypto.md5('hello'); })()").unwrap();
+        assert_eq!(out, "5d41402abc4b2a76b9719d911017c592");
+    }
+
+    #[test]
+    fn md5_empty_input_is_valid() {
+        let empty_md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let out = eval_with_lx("(function(){ return lx.utils.crypto.md5(''); })()").unwrap();
+        assert_eq!(out, empty_md5);
+        let no_args = eval_with_lx("(function(){ return lx.utils.crypto.md5(); })()").unwrap();
+        assert_eq!(no_args, empty_md5);
+    }
+
+    #[test]
+    fn md5_accepts_array_buffer_input() {
+        let template = "(function(){ var b = lx.utils.buffer.from('@HEX@', 'hex'); return lx.utils.crypto.md5(b); })()";
+        let out = eval_with_lx(&template.replace("@HEX@", "68656c6c6f")).unwrap();
+        assert_eq!(out, "5d41402abc4b2a76b9719d911017c592");
+
+        let empty_buf = eval_with_lx(&template.replace("@HEX@", "")).unwrap();
+        assert_eq!(empty_buf, "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    #[test]
+    fn md5_rejects_wrong_argument_types_with_type_error() {
+        let template = "(function(){ try { lx.utils.crypto.md5(@ARG@); return 'no-error'; } catch (e) { return e.name; } })()";
+        for arg in ["42", "-1", "null", "undefined", "true", "{}", "[]"] {
+            let out = eval_with_lx(&template.replace("@ARG@", arg)).unwrap();
+            assert!(out.starts_with("TypeError"), "md5({arg}) got: {out}");
+        }
     }
 }
