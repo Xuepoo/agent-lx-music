@@ -15,3 +15,5 @@ Thumbs.db
 
 # Temp
 /tmp/
+.carryctx/config.local.toml
+.worktrees/
