@@ -337,23 +337,18 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
             let conn_socket = client.socket_path.clone();
             let _ = crate::player::ipc::send_mpv_command(
                 &conn_socket,
-                vec![json!("playlist-move"), json!(f), json!(t)],
+                vec![
+                    json!("playlist-move"),
+                    json!(f),
+                    json!(mpv_playlist_move_target(f, t)),
+                ],
             );
 
             let mut songs = queue.songs;
             let item = songs.remove(f);
             songs.insert(t, item);
 
-            let mut new_current = queue.current_index;
-            if let Some(curr) = queue.current_index {
-                if curr == f {
-                    new_current = Some(t);
-                } else if f < curr && t >= curr {
-                    new_current = Some(curr - 1);
-                } else if f > curr && t <= curr {
-                    new_current = Some(curr + 1);
-                }
-            }
+            let new_current = adjust_current_index_after_move(queue.current_index, f, t);
 
             let updated_queue = PlayQueue {
                 songs,
@@ -377,4 +372,107 @@ pub async fn run(action: QueueAction, json_out: bool) -> Result<()> {
 fn paths_to_current_json() -> std::path::PathBuf {
     let paths = lux_core::config::resolve_paths();
     paths.cache_dir.join("current.json")
+}
+
+/// mpv `playlist-move` target argument that lands an entry at final
+/// position `to`. mpv interprets the second argument as "the entry whose
+/// place is taken", so moving forward needs `to + 1`; moving backward uses
+/// `to` directly.
+fn mpv_playlist_move_target(from: usize, to: usize) -> usize {
+    if from < to { to + 1 } else { to }
+}
+
+/// Current-index bookkeeping equivalent to local `remove(from)` + `insert(to)`.
+fn adjust_current_index_after_move(curr: Option<usize>, from: usize, to: usize) -> Option<usize> {
+    match curr {
+        Some(c) if c == from => Some(to),
+        Some(c) if from < c && c <= to => Some(c - 1),
+        Some(c) if to <= c && c < from => Some(c + 1),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Simulate mpv's own interpretation of `playlist-move from arg`:
+    /// remove at `from`, then insert so the entry takes the place of the
+    /// element now at index `arg` (i.e. before it).
+    fn simulate_mpv_move(order: &mut Vec<usize>, from: usize, to: usize) {
+        let arg = mpv_playlist_move_target(from, to);
+        let item = order.remove(from);
+        let ins = if from < arg { arg - 1 } else { arg };
+        order.insert(ins.min(order.len()), item);
+    }
+
+    fn assert_move_equivalent(n: usize, from: usize, to: usize) {
+        let mut local: Vec<usize> = (0..n).collect();
+        let item = local.remove(from);
+        local.insert(to, item);
+
+        let mut mpv: Vec<usize> = (0..n).collect();
+        simulate_mpv_move(&mut mpv, from, to);
+
+        assert_eq!(
+            local, mpv,
+            "local remove+insert must match mpv playlist-move ({from}->{to})"
+        );
+    }
+
+    #[test]
+    fn move_forward_matches_mpv_semantics() {
+        assert_move_equivalent(4, 0, 2);
+        assert_move_equivalent(4, 1, 3);
+        assert_move_equivalent(5, 0, 4);
+        assert_eq!(mpv_playlist_move_target(0, 2), 3);
+        assert_eq!(mpv_playlist_move_target(1, 3), 4);
+    }
+
+    #[test]
+    fn move_backward_matches_mpv_semantics() {
+        assert_move_equivalent(4, 2, 0);
+        assert_move_equivalent(4, 3, 1);
+        assert_move_equivalent(5, 4, 0);
+        assert_eq!(mpv_playlist_move_target(2, 0), 0);
+        assert_eq!(mpv_playlist_move_target(3, 1), 1);
+    }
+
+    #[test]
+    fn move_to_same_position_is_noop() {
+        assert_move_equivalent(4, 1, 1);
+        assert_eq!(mpv_playlist_move_target(1, 1), 1);
+    }
+
+    #[test]
+    fn move_adjacent_positions() {
+        assert_move_equivalent(4, 0, 1);
+        assert_move_equivalent(4, 1, 0);
+        assert_move_equivalent(4, 2, 3);
+        assert_move_equivalent(4, 3, 2);
+    }
+
+    #[test]
+    fn current_index_follows_moved_entry() {
+        // The playing song itself is moved.
+        assert_eq!(adjust_current_index_after_move(Some(1), 1, 3), Some(3));
+        assert_eq!(adjust_current_index_after_move(Some(3), 3, 0), Some(0));
+    }
+
+    #[test]
+    fn current_index_shifts_when_crossed_by_move() {
+        // Move crosses the current song from below.
+        assert_eq!(adjust_current_index_after_move(Some(2), 0, 3), Some(1));
+        // Move crosses the current song from above.
+        assert_eq!(adjust_current_index_after_move(Some(1), 3, 0), Some(2));
+        // Boundary: target equals current slot.
+        assert_eq!(adjust_current_index_after_move(Some(2), 0, 2), Some(1));
+        assert_eq!(adjust_current_index_after_move(Some(2), 3, 2), Some(3));
+    }
+
+    #[test]
+    fn current_index_untouched_by_disjoint_move() {
+        assert_eq!(adjust_current_index_after_move(Some(1), 2, 3), Some(1));
+        assert_eq!(adjust_current_index_after_move(None, 2, 3), None);
+    }
 }
