@@ -6,6 +6,7 @@ pub mod fav;
 pub mod history;
 pub mod local;
 pub mod lyric;
+pub mod mcp;
 pub mod now;
 pub mod pic;
 pub mod play;
@@ -48,8 +49,12 @@ pub(crate) fn parse_volume_delta(value: &str) -> Result<i32> {
     Ok(sign * magnitude)
 }
 
-pub async fn dispatch(command: Commands, json: bool) -> Result<()> {
+pub async fn dispatch(command: Commands, json: bool, quiet: bool) -> Result<()> {
     match command {
+        Commands::Mcp => {
+            // Foreground server; returns only when stdin hits EOF.
+            mcp::run(quiet)?;
+        }
         Commands::Config { action } => {
             config::run(action, json)?;
         }

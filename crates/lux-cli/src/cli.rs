@@ -228,6 +228,9 @@ pub enum Commands {
         play: bool,
     },
 
+    /// Run the MCP stdio server (JSON-RPC 2.0 over NDJSON until EOF)
+    Mcp,
+
     /// Discover curated playlists and recommendations
     #[command(visible_alias = "explore")]
     Discover {

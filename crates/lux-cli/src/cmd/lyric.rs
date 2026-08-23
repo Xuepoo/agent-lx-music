@@ -29,41 +29,34 @@ fn no_active_song_error() -> anyhow::Error {
     anyhow!("No active song is playing and no song ID was provided.")
 }
 
-/// Load the active song from `<cache_dir>/current.json`, if any.
-///
-/// Accepts either a bare entry object or a `{"song": {...}}` wrapper;
-/// missing, unreadable, or malformed files yield `None`.
-fn read_current_song(cache_dir: &Path) -> Option<SearchCacheEntry> {
-    let content = fs::read_to_string(cache_dir.join("current.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let song_val = value.get("song").unwrap_or(&value);
-    serde_json::from_value::<SearchCacheEntry>(song_val.clone()).ok()
+/// Shared error for a resolved song whose selected lyric track is missing.
+pub fn missing_track_error(track: &str) -> anyhow::Error {
+    match track {
+        "translated" => anyhow!("No translated lyrics available for this song."),
+        "romanized" => anyhow!("No romanized lyrics available for this song."),
+        _ => anyhow!("Lyrics are empty or not available."),
+    }
 }
 
-/// Guard against silently clobbering an existing lyrics file.
-///
-/// The refusal error names the offending path so users can identify it
-/// without re-running with debug output.
-fn ensure_writable(target: &Path, force: bool) -> Result<()> {
-    should_write(target.exists(), force).map_err(|_| {
-        anyhow!(
-            "Refusing to overwrite existing file '{}' (use --force to overwrite)",
-            target.display()
-        )
-    })
+/// A fully resolved lyric fetch: the matched song, which track was
+/// selected, and its content (`None` when the track is empty/missing).
+pub struct LyricFetch {
+    pub song: SearchCacheEntry,
+    pub track: &'static str,
+    pub content: Option<String>,
 }
 
-pub async fn run(
-    id: Option<String>,
-    translated: bool,
-    romanized: bool,
-    save: bool,
-    force: bool,
-    json: bool,
-) -> Result<()> {
+/// Resolve a song by explicit ID (CLI ID or platform song ID) or from the
+/// currently-playing state, then fetch and select the requested lyric
+/// track. Shared by `alx lyric` and the MCP `lyric_get` tool; presentation
+/// and file-saving stay with the callers.
+///
+/// Time/space complexity: O(1) DB lookups + one network resolve / O(n) for
+/// n lyric bytes.
+pub fn fetch_lyric(id: Option<&str>, translated: bool, romanized: bool) -> Result<LyricFetch> {
     crate::library::db::init_db()?;
 
-    let song = if let Some(ref target_id) = id {
+    let song = if let Some(target_id) = id {
         if let Some(s) = get_song_by_cli_id(target_id)? {
             s
         } else {
@@ -115,9 +108,58 @@ pub async fn run(
         ("main", Some(lyric_info.lyric.as_str()))
     };
 
-    let content_to_print = match track_content {
-        Some(content) if !content.trim().is_empty() => content,
-        _ => {
+    let content = match track_content {
+        Some(content) if !content.trim().is_empty() => Some(content.to_string()),
+        _ => None,
+    };
+
+    Ok(LyricFetch {
+        song,
+        track: track_name,
+        content,
+    })
+}
+
+/// Load the active song from `<cache_dir>/current.json`, if any.
+///
+/// Accepts either a bare entry object or a `{"song": {...}}` wrapper;
+/// missing, unreadable, or malformed files yield `None`. Shared by the
+/// lyric, status, and MCP layers.
+pub(crate) fn read_current_song(cache_dir: &Path) -> Option<SearchCacheEntry> {
+    let content = fs::read_to_string(cache_dir.join("current.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let song_val = value.get("song").unwrap_or(&value);
+    serde_json::from_value::<SearchCacheEntry>(song_val.clone()).ok()
+}
+
+/// Guard against silently clobbering an existing lyrics file.
+///
+/// The refusal error names the offending path so users can identify it
+/// without re-running with debug output.
+fn ensure_writable(target: &Path, force: bool) -> Result<()> {
+    should_write(target.exists(), force).map_err(|_| {
+        anyhow!(
+            "Refusing to overwrite existing file '{}' (use --force to overwrite)",
+            target.display()
+        )
+    })
+}
+
+pub async fn run(
+    id: Option<String>,
+    translated: bool,
+    romanized: bool,
+    save: bool,
+    force: bool,
+    json: bool,
+) -> Result<()> {
+    let fetched = fetch_lyric(id.as_deref(), translated, romanized)?;
+    let song = fetched.song;
+    let track_name = fetched.track;
+
+    let content_to_print = match fetched.content {
+        Some(content) => content,
+        None => {
             if json {
                 println!(
                     "{}",
@@ -132,13 +174,7 @@ pub async fn run(
                 );
                 return Ok(());
             } else {
-                if translated {
-                    return Err(anyhow!("No translated lyrics available for this song."));
-                } else if romanized {
-                    return Err(anyhow!("No romanized lyrics available for this song."));
-                } else {
-                    return Err(anyhow!("Lyrics are empty or not available."));
-                }
+                return Err(missing_track_error(track_name));
             }
         }
     };

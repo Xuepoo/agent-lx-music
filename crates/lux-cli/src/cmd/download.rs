@@ -79,15 +79,51 @@ struct DownloadHistoryTableEntry {
     created_at: String,
 }
 
+/// Queue downloads by CLI ID: resolve each ID against the search cache,
+/// insert a pending task row, and lazy-start the download daemon when
+/// anything was queued. Quality override silently falls back to the
+/// configured default on unparsable values (CLI parity).
+///
+/// Shared by `alx download add` (IDs branch) and the MCP `download_add`
+/// tool; playlist-file matching stays with the CLI path.
+/// Time/space complexity: O(k) cache lookups for k IDs / O(k).
+pub fn download_add_ids(
+    ids: &[String],
+    quality: Option<String>,
+) -> Result<Vec<db::SearchCacheEntry>> {
+    let config = lux_core::config::Config::load().unwrap_or_default();
+    let selected_quality = quality
+        .as_ref()
+        .and_then(|q| std::str::FromStr::from_str(q).ok())
+        .unwrap_or(config.source.default_quality);
+
+    let mut added_songs = Vec::new();
+    for cli_id in ids {
+        let song_entry = db::get_song_by_cli_id(cli_id)?
+            .ok_or_else(|| anyhow!("CLI ID '{}' not found in cache. Search first.", cli_id))?;
+
+        db::insert_download(
+            &song_entry.song_id,
+            &song_entry.source,
+            &song_entry.name,
+            &song_entry.singer,
+            selected_quality.as_str(),
+        )?;
+
+        added_songs.push(song_entry);
+    }
+
+    // Lazy spawn daemon if not running
+    if !added_songs.is_empty() {
+        ensure_daemon_running()?;
+    }
+
+    Ok(added_songs)
+}
+
 pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
     match action {
         DownloadAction::Add { ids, quality, file } => {
-            let config = lux_core::config::Config::load().unwrap_or_default();
-            let selected_quality = quality
-                .as_ref()
-                .and_then(|q| std::str::FromStr::from_str(q).ok())
-                .unwrap_or(config.source.default_quality);
-
             let mut added_songs = Vec::new();
 
             if let Some(file_path_str) = file {
@@ -116,6 +152,15 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
                 let parsed_quality = quality
                     .as_ref()
                     .and_then(|q| q.parse::<lux_core::types::Quality>().ok());
+                let selected_quality = quality
+                    .as_ref()
+                    .and_then(|q| std::str::FromStr::from_str(q).ok())
+                    .unwrap_or(
+                        lux_core::config::Config::load()
+                            .unwrap_or_default()
+                            .source
+                            .default_quality,
+                    );
 
                 for (idx, track) in imported_tracks.iter().enumerate() {
                     if !json {
@@ -157,24 +202,11 @@ pub async fn run(action: DownloadAction, json: bool) -> Result<()> {
                     }
                 }
             } else {
-                for cli_id in ids {
-                    let song_entry = db::get_song_by_cli_id(&cli_id)?.ok_or_else(|| {
-                        anyhow!("CLI ID '{}' not found in cache. Search first.", cli_id)
-                    })?;
-
-                    db::insert_download(
-                        &song_entry.song_id,
-                        &song_entry.source,
-                        &song_entry.name,
-                        &song_entry.singer,
-                        selected_quality.as_str(),
-                    )?;
-
-                    added_songs.push(song_entry);
-                }
+                added_songs = download_add_ids(&ids, quality)?;
             }
 
-            // Lazy spawn daemon if not running
+            // Lazy spawn daemon if not running (idempotent; also covers the
+            // playlist-file branch above)
             if !added_songs.is_empty() {
                 ensure_daemon_running()?;
             }
