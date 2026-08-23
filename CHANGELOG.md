@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-24
+
+### Added
+
+- **MCP Stdio Server (`alx mcp`)**: New foreground subcommand exposing `alx` to LLM agents over a hand-rolled JSON-RPC 2.0 / MCP 2024-11-05-compatible subset (NDJSON framing, no new dependencies). Ships 18 tools covering search, playback control, queue, playlists, favorites, lyrics, and downloads; stdout carries protocol frames exclusively while diagnostics go to stderr. Queue indices are 0-based at the MCP layer. Shared business logic was extracted into service functions reused by both the CLI and MCP paths (search pipeline, playback start core, queue append/remove transitions, lyric fetch, download enqueue).
+
+---
+
 ## [0.3.4] - 2026-06-11
 
 ### Fixed

@@ -450,3 +450,70 @@ alx config set default_quality flac # 写入修改 Key 参数值
 alx config path                    # 打印 config.toml 配置文件物理路径
 alx config edit                    # 直接使用终端的 $EDITOR 打开配置文件进行编辑
 ```
+
+---
+
+## 11. Agent 集成 — MCP 服务器 (Agent Integration)
+
+### `alx mcp`
+
+以前台模式启动一个 Model Context Protocol (MCP) stdio 服务器，让外部 LLM Agent（opencode、Claude 等）无需解析人类可读输出即可结构化地驱动 `alx` 的检索、播放与曲库管理。
+
+* **传输协议**: JSON-RPC 2.0，换行分隔（NDJSON，每行一条消息），兼容 MCP `2024-11-05` 子集。
+* **进程生命周期**: 前台运行直至 stdin EOF 后以退出码 0 结束。
+* **流约定**: stdout 仅承载协议帧；所有诊断日志写入 stderr（`--quiet` 可关闭）。
+
+```bash
+# opencode / Claude Desktop 注册示例
+{
+  "mcpServers": {
+    "alx": {
+      "command": "alx",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+#### 支持的方法
+
+| Method | 行为 |
+| --- | --- |
+| `initialize` | 握手：返回 `protocolVersion: "2024-11-05"`、`capabilities.tools` 与 `serverInfo { name: "alx", version }` |
+| `notifications/initialized`, `notifications/cancelled` | 静默确认 |
+| `tools/list` | 返回下方工具描述符（含 draft-07 inputSchema） |
+| `tools/call` | 执行工具；结果为 `{ content: [{ type: "text", text: <紧凑JSON> }], isError }`，失败时 `isError: true` 且 text 为 `{"error": ...}` |
+| `ping` | 返回 `{}` |
+| 其他方法 | JSON-RPC 错误 `-32601 Method not found` |
+
+#### v1 工具表
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| `search` | `query`*, `source?`, `page?`, `limit?` | 全网检索并写入本地缓存；结果含稳定 `cli_id` |
+| `play` | `ids[]` 或 `url`, `replace_queue?` | 播放缓存歌曲 ID、直链 URL 或本地文件 |
+| `playback_control` | `action`: pause/resume/stop/toggle | 播放状态控制（不会冷启动 mpv） |
+| `skip` | `direction`: next/prev | 切歌 |
+| `status` | — | 当前播放状态（position/duration/volume/queue_index/song） |
+| `queue_list` | — | 列出播放队列（数组下标 0-based） |
+| `queue_add` | `ids[]`* | 按 CLI ID 追加入队 |
+| `queue_remove` | `index`* (0-based) | 移除指定队列项 |
+| `queue_clear` | — | 清空队列并停止播放 |
+| `playlist_list` / `playlist_show` | `name?` | 歌单列表 / 详情 |
+| `playlist_add` / `playlist_remove` | `name`*, `ids[]`*/`id`* | 歌单增删 |
+| `favorite_add` / `favorite_list` | `id?`* | 内置 Favorites 歌单增查 |
+| `lyric_get` | `id?`, `track?` | 歌词获取（缓存优先；track = main/translated/romanized） |
+| `download_add` / `download_status` | `ids[]`*, `quality?` | 后台下载任务入队 / 状态查询 |
+
+带 `*` 为必填参数。所有队列类索引在 MCP 层统一为 **0-based**（CLI 层保持 1-based）。
+
+#### 会话示例
+
+```bash
+$ alx mcp
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"id":1,"jsonrpc":"2.0","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"alx","version":"0.4.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\"status\":\"stopped\",\"song\":null,...}"}],"isError":false}}
+```
