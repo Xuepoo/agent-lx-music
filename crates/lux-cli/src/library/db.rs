@@ -648,6 +648,38 @@ pub fn insert_search_cache(entry: &SearchCacheEntry) -> Result<()> {
     Ok(())
 }
 
+/// Insert into the search cache only when the cli_id is not present yet.
+///
+/// Getters such as `get_playlist_songs` / `get_history` use this to make
+/// playlist/history songs resolvable by CLI id without clobbering fresher
+/// metadata recorded by a later search.
+pub fn insert_search_cache_if_absent(entry: &SearchCacheEntry) -> Result<()> {
+    let conn = get_db_conn()?;
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO search_cache (
+            cli_id, song_id, name, singer, source, interval, album_name,
+            album_id, pic_url, songmid, hash, extra, cached_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            entry.cli_id,
+            entry.song_id,
+            entry.name,
+            entry.singer,
+            entry.source,
+            entry.interval,
+            entry.album_name,
+            entry.album_id,
+            entry.pic_url,
+            entry.songmid,
+            entry.hash,
+            entry.extra,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn get_cached_lyrics(
     song_id: &str,
     source: &str,
@@ -875,10 +907,7 @@ pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
     let rows = stmt.query_map(params![limit as i64], |row| {
         let song_id: String = row.get(0)?;
         let source: String = row.get(1)?;
-        let hash_input = format!("{}-{}", source, song_id);
-        use md5::Digest;
-        let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = hex::encode(digest)[..8].to_string();
+        let cli_id = crate::cmd::search::generate_cli_id(&source, &song_id);
 
         Ok(SearchCacheEntry {
             cli_id,
@@ -899,7 +928,7 @@ pub fn get_history(limit: usize) -> Result<Vec<SearchCacheEntry>> {
     let mut result = Vec::new();
     for row in rows {
         let entry = row?;
-        let _ = insert_search_cache(&entry);
+        let _ = insert_search_cache_if_absent(&entry);
         result.push(entry);
     }
     Ok(result)
@@ -1039,10 +1068,7 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
     let rows = stmt.query_map(params![playlist_id], |row| {
         let song_id: String = row.get(0)?;
         let source: String = row.get(1)?;
-        let hash_input = format!("{}-{}", source, song_id);
-        use md5::Digest;
-        let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = hex::encode(digest)[..8].to_string();
+        let cli_id = crate::cmd::search::generate_cli_id(&source, &song_id);
 
         Ok(SearchCacheEntry {
             cli_id,
@@ -1063,7 +1089,7 @@ pub fn get_playlist_songs(playlist_name: &str) -> Result<Vec<SearchCacheEntry>> 
     let mut result = Vec::new();
     for row in rows {
         let entry = row?;
-        let _ = insert_search_cache(&entry);
+        let _ = insert_search_cache_if_absent(&entry);
         result.push(entry);
     }
     Ok(result)
@@ -1637,6 +1663,49 @@ pub(crate) mod tests {
         assert_eq!(cached.tlyric, Some("[00:00.00] Translation".to_string()));
         assert!(cached.rlyric.is_none());
         assert!(cached.lxlyric.is_none());
+
+        release_sandbox(&temp_dir);
+    }
+
+    #[test]
+    fn playlist_songs_use_canonical_cli_ids() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let temp_dir = sandbox_home("db_playlist_cli_id");
+        init_db().unwrap();
+        create_playlist("canonical", None).unwrap();
+        let id = crate::cmd::search::generate_cli_id("wy", "3707142");
+        let mut entry = sample_entry(&id, "3707142");
+        entry.source = "wy".to_string();
+        add_to_playlist("canonical", &entry).unwrap();
+
+        let songs = get_playlist_songs("canonical").unwrap();
+        assert_eq!(songs.len(), 1);
+        assert_eq!(songs[0].cli_id, id);
+        assert_eq!(songs[0].cli_id.len(), 16);
+
+        release_sandbox(&temp_dir);
+    }
+
+    #[test]
+    fn getters_never_clobber_fresher_cache_rows() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let temp_dir = sandbox_home("db_getter_clobber");
+        init_db().unwrap();
+
+        let id = crate::cmd::search::generate_cli_id("kw", "fresh1");
+        let mut fresh = sample_entry(&id, "fresh1");
+        fresh.source = "kw".to_string();
+        fresh.songmid = Some("songmid-fresh".to_string());
+        insert_search_cache(&fresh).unwrap();
+
+        create_playlist("clobber", None).unwrap();
+        add_to_playlist("clobber", &fresh).unwrap();
+
+        get_playlist_songs("clobber").unwrap();
+        get_history(10).unwrap();
+
+        let stored = get_song_from_cache("fresh1", "kw").unwrap().unwrap();
+        assert_eq!(stored.songmid, Some("songmid-fresh".to_string()));
 
         release_sandbox(&temp_dir);
     }

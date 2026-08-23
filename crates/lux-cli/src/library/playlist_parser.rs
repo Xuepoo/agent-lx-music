@@ -2,7 +2,7 @@
 use crate::library::db::{SearchCacheEntry, insert_search_cache};
 use anyhow::Result;
 use lux_core::types::{MusicInfo, Quality, Source};
-use md5::Digest;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -224,9 +224,7 @@ pub async fn resolve_imported_track(
 ) -> Result<Option<SearchCacheEntry>> {
     // If the track already possesses direct identifiers, bypass matching
     if let (Some(sid), Some(src)) = (&track.song_id, &track.source) {
-        let hash_input = format!("{}-{}", src, sid);
-        let digest = md5::Md5::digest(hash_input.as_bytes());
-        let cli_id = hex::encode(digest)[..8].to_string();
+        let cli_id = crate::cmd::search::generate_cli_id(src, sid);
 
         let entry = SearchCacheEntry {
             cli_id,
@@ -329,9 +327,10 @@ pub async fn resolve_imported_track(
         ) {
             if !url.is_empty() {
                 // Resolved successfully! Construct cache entry and commit
-                let hash_input = format!("{}-{}", candidate.source.as_str(), candidate.songmid);
-                let digest = md5::Md5::digest(hash_input.as_bytes());
-                let cli_id = hex::encode(digest)[..8].to_string();
+                let cli_id = crate::cmd::search::generate_cli_id(
+                    candidate.source.as_str(),
+                    &candidate.songmid,
+                );
 
                 let entry = SearchCacheEntry {
                     cli_id,
