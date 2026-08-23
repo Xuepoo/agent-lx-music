@@ -34,6 +34,13 @@ pub struct HistoryDbEntry {
     pub played_at: String,
 }
 
+/// Current `PRAGMA user_version` of the database schema (DEF-012/#148).
+///
+/// Bump when introducing a schema change and add a matching migration step
+/// in [`migrate_schema`]; every version below this constant must have an
+/// ordered, forward-only match arm.
+const SCHEMA_VERSION: i32 = 1;
+
 pub fn get_db_conn() -> Result<Connection> {
     let paths = lux_core::config::resolve_paths();
     if let Some(parent) = paths.db_file.parent() {
@@ -206,6 +213,10 @@ pub fn init_db() -> Result<()> {
         [],
     )?;
 
+    // DEF-012/#148: bring the schema up to SCHEMA_VERSION before any data
+    // maintenance runs, stamping fresh and legacy databases alike.
+    migrate_schema(&conn)?;
+
     // DEF-010/#146: databases written before foreign_keys enforcement may
     // already hold playlist_songs rows whose playlist is gone. Sweep them at
     // startup; the statement is idempotent and cheap (indexed playlist_id).
@@ -214,6 +225,34 @@ pub fn init_db() -> Result<()> {
         [],
     )?;
 
+    Ok(())
+}
+
+/// Forward-only migration framework over `PRAGMA user_version` (DEF-012/#148).
+///
+/// Applies ordered steps until the stored version reaches
+/// [`SCHEMA_VERSION`]. Version 0 covers both fresh databases (tables just
+/// created above) and legacy installs created before versioning existed:
+/// the `CREATE ... IF NOT EXISTS` statements already brought either shape to
+/// the v1 layout, so the baseline step is a data-preserving stamp only.
+fn migrate_schema(conn: &Connection) -> Result<()> {
+    let stored: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if stored > SCHEMA_VERSION {
+        return Err(anyhow::anyhow!(
+            "Database schema version {} is newer than supported by this build ({})",
+            stored,
+            SCHEMA_VERSION
+        ));
+    }
+    for from in stored..SCHEMA_VERSION {
+        match from {
+            // v0 -> v1: baseline. No ALTERs required yet; headroom for
+            // future steps starts here.
+            0 => {}
+            other => anyhow::bail!("Unhandled schema migration step {}", other),
+        }
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -1390,6 +1429,101 @@ mod tests {
         assert!(get_song_by_cli_id("foo_bar").unwrap().is_some());
         assert!(get_song_by_cli_id("100%hit").unwrap().is_some());
         assert!(get_song_by_cli_id("abc123").unwrap().is_some());
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: fresh databases are stamped with the current schema
+    /// version.
+    #[test]
+    fn test_schema_version_stamped_on_fresh_db() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-fresh");
+
+        init_db().unwrap();
+        let conn = get_db_conn().unwrap();
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: a legacy database created before versioning existed is
+    /// stamped to the current version without altering its data.
+    #[test]
+    fn test_legacy_db_is_stamped_and_preserved() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-legacy");
+        let db_file = lux_core::config::resolve_paths().db_file;
+        fs::create_dir_all(db_file.parent().unwrap()).unwrap();
+
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            raw.execute(
+                "CREATE TABLE playlists (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    song_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );",
+                [],
+            )
+            .unwrap();
+            raw.execute(
+                "INSERT INTO playlists (name, description, song_count, created_at, updated_at)
+                 VALUES ('Legacy', 'kept', 0, '2026-01-01T00:00:00+00:00',
+                    '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        }
+        // No user_version stamped yet (still 0).
+        {
+            let raw = Connection::open(&db_file).unwrap();
+            let version: i32 = raw
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+        }
+
+        init_db().unwrap();
+
+        let conn = get_db_conn().unwrap();
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        // Pre-existing data survived the stamp.
+        let names: Vec<String> = list_playlists()
+            .unwrap()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        assert!(names.contains(&"Legacy".to_string()));
+        // The upgraded database stays functional for writes.
+        create_playlist("AfterMigration", None).unwrap();
+
+        release_sandbox(&dir);
+    }
+
+    /// DEF-012/#148: databases written by a newer build must not be touched.
+    #[test]
+    fn test_newer_schema_version_rejected() {
+        let _guard = DB_TEST_MUTEX.lock().unwrap();
+        let dir = sandbox_home("alx-test-db-schema-newer");
+
+        init_db().unwrap();
+        {
+            let raw = Connection::open(lux_core::config::resolve_paths().db_file).unwrap();
+            raw.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+        let err = init_db().unwrap_err();
+        assert!(err.to_string().contains("newer"));
 
         release_sandbox(&dir);
     }
