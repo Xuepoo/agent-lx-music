@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use md5::Digest;
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct SourceMetadata {
@@ -57,6 +58,44 @@ pub fn parse_metadata(script_content: &str) -> Result<SourceMetadata> {
     })
 }
 
+/// Result of running the shared [`validate_source_script`] gate.
+#[derive(Debug)]
+pub struct ValidatedScript {
+    pub meta: SourceMetadata,
+    /// Raw `inited` event captured from the sandboxed init phase.
+    pub inited: serde_json::Value,
+}
+
+/// Shared validation gate for lx-music source scripts: parse the metadata
+/// header, then smoke-test the script inside the sandbox by executing its init
+/// phase and requiring a registered `sources` mapping.
+pub fn validate_source_script(content: &str) -> Result<ValidatedScript> {
+    // 1. Parse Metadata comment
+    let meta = parse_metadata(content)?;
+
+    // 2. Validate and capture 'inited' event via JsSandbox
+    let sandbox = JsSandbox::new()?;
+    let inited_val = sandbox.execute_init(content)?;
+
+    let _sources = inited_val
+        .get("sources")
+        .ok_or_else(|| anyhow!("Script registered successfully but missed 'sources' mapping"))?;
+
+    Ok(ValidatedScript {
+        meta,
+        inited: inited_val,
+    })
+}
+
+/// Atomically apply a validated script update: content failing the shared
+/// [`validate_source_script`] gate is rejected before the installed script
+/// file is touched, so a broken remote body can never clobber a working one.
+pub fn apply_validated_update(script_path: &Path, new_content: &str) -> Result<()> {
+    validate_source_script(new_content)?;
+    fs::write(script_path, new_content)?;
+    Ok(())
+}
+
 pub fn add_source_script(path_or_url: &str) -> Result<()> {
     // 1. Load script content
     let content = if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
@@ -76,23 +115,21 @@ pub fn add_source_script(path_or_url: &str) -> Result<()> {
             .map_err(|e| anyhow!("Failed to read local script: {}", e))?
     };
 
-    // 2. Parse Metadata comment
-    let meta = parse_metadata(&content)?;
+    // 2+3. Shared validation gate (metadata + sandbox init smoke test)
+    let validated = validate_source_script(&content)?;
+    let meta = validated.meta;
 
-    // 3. Compute hash
+    // 4. Compute hash
     let mut hasher = md5::Md5::new();
     hasher.update(content.as_bytes());
     let hash = hex::encode(hasher.finalize());
 
-    // 4. Validate and capture 'inited' event via JsSandbox
-    let sandbox = JsSandbox::new()?;
-    let inited_val = sandbox.execute_init(&content)?;
-
-    let sources_obj = inited_val
+    // Parse platforms list and qualities map
+    let sources_obj = validated
+        .inited
         .get("sources")
         .ok_or_else(|| anyhow!("Script registered successfully but missed 'sources' mapping"))?;
 
-    // Parse platforms list and qualities map
     let mut platforms = Vec::new();
     let mut qualities_map = HashMap::new();
 
@@ -216,5 +253,74 @@ console.log("hello");
             .execute_resolve(script, "kw", "12345", "320k", serde_json::json!({}))
             .unwrap();
         assert_eq!(url, "https://music.download.url/song.mp3");
+    }
+
+    const MINIMAL_VALID_SCRIPT: &str = r#"
+/*!
+ * @name Minimal Test Source
+ * @version v1.0.0
+ * @author Tester
+ */
+const { send } = globalThis.lx;
+send('inited', {
+    status: true,
+    sources: {
+        kw: { type: 'music', qualitys: ['128k'] }
+    }
+});
+"#;
+
+    #[test]
+    fn test_validate_accepts_minimal_script() {
+        let validated = validate_source_script(MINIMAL_VALID_SCRIPT).unwrap();
+        assert_eq!(validated.meta.name, "Minimal Test Source");
+        assert_eq!(validated.meta.version.as_deref(), Some("v1.0.0"));
+        assert!(validated.inited.get("sources").is_some());
+    }
+
+    #[test]
+    fn test_validate_rejects_html_body() {
+        let html = "<html><body><h1>502 Bad Gateway</h1></body></html>";
+        let err = validate_source_script(html).unwrap_err();
+        assert!(err.to_string().contains("Invalid script"));
+    }
+
+    #[test]
+    fn test_apply_validated_update_rejects_without_touching_script() {
+        let dir = std::env::temp_dir().join(format!(
+            "alx_loader_test_reject_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("t")
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("installed.js");
+        fs::write(&script_path, "// old working script").unwrap();
+
+        let html = "<html><body><h1>502 Bad Gateway</h1></body></html>";
+        let result = apply_validated_update(&script_path, html);
+
+        assert!(result.is_err());
+        let on_disk = fs::read_to_string(&script_path).unwrap();
+        assert_eq!(on_disk, "// old working script");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_apply_validated_update_writes_valid_script() {
+        let dir = std::env::temp_dir().join(format!(
+            "alx_loader_test_write_{}_{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("t")
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("installed.js");
+        fs::write(&script_path, "// old working script").unwrap();
+
+        apply_validated_update(&script_path, MINIMAL_VALID_SCRIPT).unwrap();
+        let on_disk = fs::read_to_string(&script_path).unwrap();
+        assert_eq!(on_disk, MINIMAL_VALID_SCRIPT);
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
