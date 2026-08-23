@@ -50,7 +50,13 @@ pub enum Commands {
         keyword: String,
         #[arg(short, long, default_value = "all", help = "Filter by source")]
         source: String,
-        #[arg(short, long, default_value_t = 1, help = "Page number")]
+        #[arg(
+            short,
+            long,
+            default_value_t = 1,
+            value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..),
+            help = "Page number"
+        )]
         page: usize,
         #[arg(short, long, default_value_t = 30, help = "Results per page")]
         limit: usize,

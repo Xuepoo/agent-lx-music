@@ -6,6 +6,12 @@ use lux_core::types::{MusicInfo, Quality, SearchResult, Source};
 #[derive(Default)]
 pub struct KuwoSource;
 
+/// Compute Kuwo's 0-based page index from a 1-based page number. Page 0 (or
+/// any underflowing value) saturates to the first page instead of wrapping.
+fn page_index(page: usize) -> usize {
+    page.saturating_sub(1)
+}
+
 #[async_trait]
 impl MusicSource for KuwoSource {
     fn platform(&self) -> Source {
@@ -29,7 +35,7 @@ impl MusicSource for KuwoSource {
             .query(&[
                 ("client", "kt"),
                 ("all", keyword),
-                ("pn", &(page - 1).to_string()),
+                ("pn", &page_index(page).to_string()),
                 ("rn", &limit.to_string()),
                 ("rformat", "json"),
                 ("encoding", "utf8"),
@@ -188,5 +194,23 @@ impl MusicSource for KuwoSource {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_index;
+
+    #[test]
+    fn test_page_index_first_pages() {
+        assert_eq!(page_index(1), 0);
+        assert_eq!(page_index(2), 1);
+        assert_eq!(page_index(10), 9);
+    }
+
+    #[test]
+    fn test_page_index_zero_saturates() {
+        // page=0 must not wrap around to usize::MAX
+        assert_eq!(page_index(0), 0);
     }
 }
