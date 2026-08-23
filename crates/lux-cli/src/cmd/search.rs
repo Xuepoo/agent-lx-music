@@ -44,7 +44,7 @@ pub const CLI_ID_LEN: usize = 16;
 
 /// Stable CLI identifier for a song: first [`CLI_ID_LEN`] lowercase hex
 /// characters of MD5 over "<source>-<songmid>".
-fn generate_cli_id(source: &str, songmid: &str) -> String {
+pub(crate) fn generate_cli_id(source: &str, songmid: &str) -> String {
     let hash_input = format!("{}-{}", source, songmid);
     let digest = md5::Md5::digest(hash_input.as_bytes());
     hex::encode(digest)[..CLI_ID_LEN].to_string()
