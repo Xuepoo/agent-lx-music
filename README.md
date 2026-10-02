@@ -1,3 +1,5 @@
+
+
 # agent-lx-music
 
 [English](README.en.md) | [简体中文](README.md)
@@ -65,7 +67,7 @@
 
 ### 2. 使用 npm / bun 安装预编译版本 (Prebuilt Binary)
 
-无需本地编译，直接从 npm 仓库安装开箱即用的预编译二进制（外部 `mpv` 仍需提前安装）：
+无需本地编译，直接从 npm 仓库安装开箱即用的预编译二进制（外部 `mpv` 仍需提前安装，`npm` 需要 Node.js >= 18）：
 
 ```bash
 npm install -g agent-lx-music
