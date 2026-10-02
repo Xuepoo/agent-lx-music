@@ -33,6 +33,6 @@
     "agent-lx-music-linux-arm64-gnu": "0.3.4",
     "agent-lx-music-darwin-x64": "0.3.4",
     "agent-lx-music-darwin-arm64": "0.3.4",
-    "agent-lx-music-win32-x64": "0.3.4"
+    "agent-lx-music-windows-x64": "0.3.4"
   }
 }
