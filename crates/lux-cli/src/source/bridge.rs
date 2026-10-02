@@ -210,8 +210,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                             } else if let Some(obj) = body.as_object() {
                                 // If it is a TypedArray/ArrayBuffer, read bytes
                                 if let Some(arr_buf) = ArrayBuffer::from_object(obj.clone()) {
-                                    let bytes: &[u8] = arr_buf.as_bytes().unwrap_or_default();
-                                    req = req.body(bytes.to_vec());
+                                    req = req.body(array_buffer_to_vec(&arr_buf));
                                 }
                             }
                         }
@@ -306,7 +305,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     }
                 } else if let Some(obj) = data.as_object() {
                     if let Some(arr_buf) = ArrayBuffer::from_object(obj.clone()) {
-                        arr_buf.as_bytes().unwrap_or_default().to_vec()
+                        array_buffer_to_vec(&arr_buf)
                     } else {
                         vec![]
                     }
@@ -339,7 +338,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     .unwrap_or_default();
 
                 let bytes = if let Some(arr_buf) = ArrayBuffer::from_object(buf.clone()) {
-                    arr_buf.as_bytes().unwrap_or_default().to_vec()
+                    array_buffer_to_vec(&arr_buf)
                 } else {
                     vec![]
                 };
@@ -372,7 +371,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     .map_err(|e| throw_err(&ctx, e))?;
 
                 let bytes = if let Some(arr_buf) = ArrayBuffer::from_object(buf.clone()) {
-                    arr_buf.as_bytes().unwrap_or_default().to_vec()
+                    array_buffer_to_vec(&arr_buf)
                 } else {
                     vec![]
                 };
@@ -422,7 +421,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     .map_err(|e| throw_err(&ctx, e))?;
 
                 let bytes = if let Some(arr_buf) = ArrayBuffer::from_object(buf.clone()) {
-                    arr_buf.as_bytes().unwrap_or_default().to_vec()
+                    array_buffer_to_vec(&arr_buf)
                 } else {
                     vec![]
                 };
@@ -453,7 +452,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     s.to_string().map_err(|e| throw_err(&ctx, e))?.into_bytes()
                 } else if let Some(obj) = args[0].as_object() {
                     match ArrayBuffer::from_object(obj.clone()) {
-                        Some(arr_buf) => arr_buf.as_bytes().unwrap_or_default().to_vec(),
+                        Some(arr_buf) => array_buffer_to_vec(&arr_buf),
                         None => {
                             return Err(Exception::throw_type(
                                 &ctx,
@@ -525,7 +524,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     .ok_or_else(|| anyhow!("buffer must be an object"))
                     .map_err(|e| throw_err(&ctx, e))?;
                 let data = if let Some(arr_buf) = ArrayBuffer::from_object(obj.clone()) {
-                    arr_buf.as_bytes().unwrap_or_default().to_vec()
+                    array_buffer_to_vec(&arr_buf)
                 } else {
                     vec![]
                 };
@@ -597,7 +596,7 @@ pub fn inject_lx<'js>(ctx: &Ctx<'js>, state: Arc<Mutex<SandboxState>>) -> Result
                     .ok_or_else(|| anyhow!("buffer must be an object"))
                     .map_err(|e| throw_err(&ctx, e))?;
                 let data = if let Some(arr_buf) = ArrayBuffer::from_object(obj.clone()) {
-                    arr_buf.as_bytes().unwrap_or_default().to_vec()
+                    array_buffer_to_vec(&arr_buf)
                 } else {
                     vec![]
                 };
@@ -713,13 +712,25 @@ fn throw_err<'js>(ctx: &Ctx<'js>, e: impl std::fmt::Display) -> rquickjs::Error 
     }
 }
 
+/// Safely copies bytes from an `ArrayBuffer` into an owned `Vec<u8>`.
+///
+/// # Safety rationale
+/// `ArrayBuffer::as_bytes` is marked unsafe in rquickjs 0.13+ because JavaScript
+/// code could theoretically detach or reallocate the buffer while the slice is borrowed.
+/// Here we immediately clone the slice into an owned `Vec<u8>` synchronously without
+/// executing any intermediate JS code or holding references across await points.
+#[inline]
+fn array_buffer_to_vec(arr_buf: &ArrayBuffer) -> Vec<u8> {
+    unsafe { arr_buf.as_bytes().unwrap_or_default().to_vec() }
+}
+
 fn get_bytes_from_val(val: Value) -> Result<Vec<u8>> {
     if let Some(s) = val.as_string() {
         let text = s.to_string()?;
         Ok(text.into_bytes())
     } else if let Some(obj) = val.as_object() {
         if let Some(arr_buf) = ArrayBuffer::from_object(obj.clone()) {
-            Ok(arr_buf.as_bytes().unwrap_or_default().to_vec())
+            Ok(array_buffer_to_vec(&arr_buf))
         } else {
             Ok(vec![])
         }
