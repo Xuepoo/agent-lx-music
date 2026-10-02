@@ -1123,6 +1123,6 @@ mod tests {
         assert_eq!(detect_audio_format(b"RIFF....WAVEfmt "), None);
         assert_eq!(detect_audio_format(b"<html><body>404"), None);
         // Exactly 16 bytes are sufficient for every signature.
-        assert_eq!(detect_audio_format(&b"fLaC".to_vec()), Some("flac"));
+        assert_eq!(detect_audio_format(b"fLaC".as_ref()), Some("flac"));
     }
 }
