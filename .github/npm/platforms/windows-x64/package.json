@@ -1,5 +1,5 @@
 {
-  "name": "agent-lx-music-win32-x64",
+  "name": "agent-lx-music-windows-x64",
   "version": "0.3.4",
   "description": "Terminal-native music CLI binary for x86_64-pc-windows-msvc",
   "license": "MIT",

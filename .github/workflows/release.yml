@@ -179,7 +179,7 @@ jobs:
             "alx-linux-aarch64/alx-linux-aarch64 linux-arm64-gnu alx" \
             "alx-macos-x86_64/alx-macos-x86_64 darwin-x64 alx" \
             "alx-macos-aarch64/alx-macos-aarch64 darwin-arm64 alx" \
-            "alx-windows-x86_64/alx-windows-x86_64.exe win32-x64 alx.exe"; do
+            "alx-windows-x86_64/alx-windows-x86_64.exe windows-x64 alx.exe"; do
             read -r src pkg binary_name <<< "$entry"
             if [ ! -f "artifacts/$src" ]; then
               echo "::error::Missing artifact file: artifacts/$src"

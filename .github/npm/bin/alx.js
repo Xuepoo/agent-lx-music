@@ -40,7 +40,7 @@ function resolvePlatformPackage() {
     case "darwin:arm64":
       return { pkg: "agent-lx-music-darwin-arm64" };
     case "win32:x64":
-      return { pkg: "agent-lx-music-win32-x64" };
+      return { pkg: "agent-lx-music-windows-x64" };
     default:
       return null;
   }

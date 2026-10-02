@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-10-02
+
+### Added
+
+- **Native Kugou Search (`kg`)**: Native search support in `lux-native` calling Kugou's public `songsearch_v2` API directly. Includes HTML tag stripping (`<em>...</em>`), robust metadata mapping (`FileHash`, `SongName`, `SingerName`, `AlbumName`, `Duration`, `Image`), and unit test coverage (#200, #201).
+
+### Fixed
+
+- **NPM Windows Distribution**: Aligned Windows platform naming convention to `agent-lx-music-windows-x64` across package definitions and release workflows.
+
+---
+
 ## [0.4.0] - 2026-08-24
 
 ### Added
